@@ -45,7 +45,7 @@ jobs:
           gradle :app:assembleDebug -PversionCode=$VERSION_CODE -PversionName=$VERSION_NAME
 
       - name: Sign APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
