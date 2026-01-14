@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -145,9 +146,75 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun readTimeFromWatch(bitmap: Bitmap) {
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+
+        cameraProviderFuture.addListener({
+            val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+
+            val preview = Preview.Builder()
+                .build()
+                .also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+            imageCapture = ImageCapture.Builder().build()
+
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageCapture
+                )
+            } catch (exc: Exception) {
+                Log.e(TAG, "Use case binding failed", exc)
+            }
+
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun captureImage() {
+        val imageCapture = imageCapture ?: return
+
         resultText.text = getString(R.string.status_thinking)
 
+        imageCapture.takePicture(
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val bitmap = imageProxyToBitmap(image)
+                    image.close()
+                    readTimeFromWatch(bitmap)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                    resultText.text = getString(R.string.error_template, exception.message)
+                }
+            }
+        )
+    }
+
+    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
+        // ImageCapture produces JPEG format, so we need to decode from the JPEG buffer
+        val buffer: ByteBuffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        
+        // Rotate bitmap if needed
+        val rotationDegrees = image.imageInfo.rotationDegrees
+        if (rotationDegrees != 0) {
+            val matrix = Matrix()
+            matrix.postRotate(rotationDegrees.toFloat())
+            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        }
+        
+        return bitmap
+    }
+
+    private fun readTimeFromWatch(bitmap: Bitmap) {
         val prompt = "Analyze this analog watch. What time is shown? Be precise. Return only HH:mm."
 
         lifecycleScope.launch {

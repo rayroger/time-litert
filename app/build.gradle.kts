@@ -24,6 +24,10 @@ android {
         jvmTarget = "17"
     }
 
+    buildFeatures {
+        viewBinding = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
