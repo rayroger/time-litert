@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
 }
 ```
+> Note: ML Kit GenAI is currently published as `1.0.0-beta01`. Update to the stable release when available.
 
 ### 2) `AndroidManifest.xml`
 ```xml

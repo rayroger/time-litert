@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ main, master, copilot/review-readme-file ]
+    branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
 
