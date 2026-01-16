@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
     inputs:
-      buildType: # Input for selecting build type
+      buildType:
         description: 'Select build type'
         required: true
         default: 'debug'
@@ -29,38 +29,42 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: gradle
-        
+
     - name: Validate keystore presence
       run: |
         echo ${{ secrets.KEYSTORE_BASE64 }} | base64 -d > /home/runner/work/time-nano/time-nano/app/keystore.jks
         if [ ! -f /home/runner/work/time-nano/time-nano/app/keystore.jks ]; then
           echo "Keystore generation failed" && exit 1
         fi
-        
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build APK
-      run: ./gradlew assemble${{ github.event.inputs.buildType }} # Use input for build type
+    - name: Build and Sign APK
+      run: |
+        VERSION_CODE=${{ github.run_number }}
+        VERSION_NAME=1.0.${{ github.run_number }}
+        if [[ "${{ github.event.inputs.buildType }}" == "release" ]]; then
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=/home/runner/work/time-nano/time-nano/app/keystore.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} \
+            -PversionCode=$VERSION_CODE \
+            -PversionName=$VERSION_NAME;
+        else
+          ./gradlew assembleDebug -PversionCode=$VERSION_CODE -PversionName=$VERSION_NAME;
+        fi
       env:
         GRADLE_BUILD_TYPE: ${{ github.event.inputs.buildType }}
 
-    - name: Sign APK if Release Build
-      if: ${{ github.event.inputs.buildType == 'release' }} # Only sign for release build
+    - name: Rename APK for Release Build
+      if: ${{ github.event.inputs.buildType == 'release' }}
       run: |
-        echo ${{ secrets.KEYSTORE_BASE64 }} | base64 -d > /home/runner/work/time-nano/time-nano/app/keystore.jks
-        ./gradlew signingReport # Optional: Verify your signing config
-        ./gradlew assembleRelease \
-          -Pandroid.injected.signing.store.file=/home/runner/work/time-nano/time-nano/app/keystore.jks \
-          -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-          -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-          -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-      env:
-        GRADLE_BUILD_TYPE: release
+        mv app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/app-release-signed.apk
 
     - name: Upload APK as build artifact
-      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.buildType }}-build
-        path: app/build/outputs/apk/${{ github.event.inputs.buildType }}/ # Adjust the path to your build output directory
+        path: app/build/outputs/apk/${{ github.event.inputs.buildType }}/
