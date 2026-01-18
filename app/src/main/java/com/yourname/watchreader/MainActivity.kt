@@ -21,10 +21,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.GenerateContentResponse
-import com.google.ai.client.generativeai.type.content
-import com.google.ai.client.generativeai.type.generationConfig
+import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
+import com.google.mediapipe.tasks.vision.core.BaseOptions
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
@@ -42,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     // Initialize MediaPipe Landmarker instead of ModelClient
     private lateinit var handLandmarker: HandLandmarker
+	private lateinit var objectDetector: ObjectDetector
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -59,6 +59,20 @@ class MainActivity : AppCompatActivity() {
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
+	
+	private fun setupDetector() {
+    val baseOptions = BaseOptions.builder()
+        .setModelAssetPath("clock_detector.tflite")
+        .build()
+
+    val options = ObjectDetector.ObjectDetectorOptions.builder()
+        .setBaseOptions(baseOptions)
+        .setScoreThreshold(0.3f) // Lower for older cameras like the Zebra
+        .setMaxResults(1)
+        .build()
+
+    objectDetector = ObjectDetector.createFromOptions(this, options)
+}
     
     private fun setupLocalModel() {
         val baseOptions = BaseOptions.builder()
@@ -150,7 +164,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bitmap = imageProxyToBitmap(image)
                     image.close()
-                    readTimeFromWatch(bitmap)
+                    readTimeLocally(bitmap)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -178,6 +192,20 @@ class MainActivity : AppCompatActivity() {
         
         return bitmap
     }
+	
+	private fun readTimeLocally(bitmap: Bitmap) {
+		val mpImage = BitmapImageBuilder(bitmap).build()
+		val results = objectDetector.detect(mpImage)
+
+		if (results.detections().isNotEmpty()) {
+			val detection = results.detections()[0]
+			val box = detection.boundingBox()
+			resultText.text = "Watch detected at: ${box.left}, ${box.top}"
+			// Next step: apply hand-detection logic within this box
+		} else {
+			resultText.text = "No watch found. Adjust lighting."
+    }
+}
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
         val prompt = "Analyze this analog watch. What time is shown? Be precise. Return only HH:mm."
