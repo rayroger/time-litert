@@ -20,12 +20,6 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.GenerateContentResponse
-import com.google.ai.client.generativeai.type.content
-import com.google.ai.client.generativeai.type.generationConfig
-import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -51,12 +45,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val generativeModel: GenerativeModel by lazy {
-        GenerativeModel(
-            modelName = "gemini-1.5-flash",
-            apiKey = BuildConfig.GEMINI_API_KEY
-        )
-    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -155,21 +144,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
-        val prompt = "Analyze this analog watch. What time is shown? Be precise. Return only HH:mm."
-
-        lifecycleScope.launch {
-            try {
-                val response = generativeModel.generateContent(
-                    content {
-                        image(bitmap)
-                        text(prompt)
-                    }
-                )
-                resultText.text = getString(R.string.time_template, response.text ?: "Unable to read")
-            } catch (e: Exception) {
-                resultText.text = getString(R.string.error_template, e.localizedMessage ?: "Unknown error")
-            }
-        }
+        // Placeholder for future LiteRT implementation
+        resultText.text = "LiteRT implementation coming soon"
     }
 
     override fun onDestroy() {
