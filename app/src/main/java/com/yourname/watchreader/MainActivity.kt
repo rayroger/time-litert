@@ -208,21 +208,8 @@ class MainActivity : AppCompatActivity() {
 }
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
-        val prompt = "Analyze this analog watch. What time is shown? Be precise. Return only HH:mm."
-
-        lifecycleScope.launch {
-            try {
-                val response = generativeModel.generateContent(
-                    content {
-                        image(bitmap)
-                        text(prompt)
-                    }
-                )
-                resultText.text = getString(R.string.time_template, response.text ?: "Unable to read")
-            } catch (e: Exception) {
-                resultText.text = getString(R.string.error_template, e.localizedMessage ?: "Unknown error")
-            }
-        }
+        // Placeholder for future LiteRT implementation
+        resultText.text = "LiteRT implementation coming soon"
     }
 
     override fun onDestroy() {

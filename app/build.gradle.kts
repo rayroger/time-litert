@@ -30,7 +30,6 @@ android {
 
     buildFeatures {
         viewBinding = true
-        buildConfig = true
     }
 
     buildTypes {
@@ -45,7 +44,6 @@ android {
 }
 
 dependencies {
-    //implementation(libs.google.ai.client)
     implementation(libs.camerax.core)
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
