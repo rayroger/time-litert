@@ -40,6 +40,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
+    // Initialize MediaPipe Landmarker instead of ModelClient
+    private lateinit var handLandmarker: HandLandmarker
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -57,7 +59,30 @@ class MainActivity : AppCompatActivity() {
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
-
+    
+    private fun setupLocalModel() {
+        val baseOptions = BaseOptions.builder()
+            .setModelAssetPath("watch_hands.tflite") // You will add this file to /assets
+            .build()
+            
+        val options = HandLandmarker.HandLandmarkerOptions.builder()
+            .setBaseOptions(baseOptions)
+            .setRunningMode(RunningMode.IMAGE)
+            .build()
+            
+        handLandmarker = HandLandmarker.createFromOptions(this, options)
+    }
+    
+    // Math logic to calculate time from detected coordinates
+    private fun calculateTime(center: Point, hrTip: Point, minTip: Point): String {
+        val hrAngle = Math.toDegrees(Math.atan2((hrTip.y - center.y).toDouble(), (hrTip.x - center.x).toDouble())) + 90
+        val minAngle = Math.toDegrees(Math.atan2((minTip.y - center.y).toDouble(), (minTip.x - center.x).toDouble())) + 90
+        
+        val hour = ((hrAngle.plus(360) % 360) / 30).toInt().let { if (it == 0) 12 else it }
+        val minute = ((minAngle.plus(360) % 360) / 6).toInt()
+        
+        return String.format("%02d:%02d", hour, minute)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)

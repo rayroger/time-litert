@@ -9,13 +9,14 @@ android {
 
     defaultConfig {
         applicationId = "com.yourname.watchreader"
-        minSdk = 31
+        minSdk = 27
         targetSdk = 35
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: "1.0"
-        
-        // Add your Gemini API key here or in local.properties
-        buildConfigField("String", "GEMINI_API_KEY", "\"${project.findProperty("GEMINI_API_KEY") ?: ""}\"")
+        // CRITICAL: Ensure models aren't compressed
+        androidResources {
+            noCompress.add("tflite")
+        }
     }
 
     compileOptions {
@@ -44,7 +45,7 @@ android {
 }
 
 dependencies {
-    implementation(libs.google.ai.client)
+    //implementation(libs.google.ai.client)
     implementation(libs.camerax.core)
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
@@ -53,4 +54,7 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.lifecycle.runtime.ktx)
+    // 2. ADD LiteRT and MediaPipe
+    implementation("com.google.ai.edge.litert:litert:1.0.1")
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 }
