@@ -32,8 +32,8 @@ jobs:
 
     - name: Validate keystore presence
       run: |
-        echo ${{ secrets.KEYSTORE_BASE64 }} | base64 -d > /home/runner/work/time-nano/time-nano/app/keystore.jks
-        if [ ! -f /home/runner/work/time-nano/time-nano/app/keystore.jks ]; then
+        echo ${{ secrets.KEYSTORE_BASE64 }} | base64 -d > /home/runner/work/time-litert/time-litert/app/keystore.jks
+        if [ ! -f /home/runner/work/time-litert/time-litert/app/keystore.jks ]; then
           echo "Keystore generation failed" && exit 1
         fi
 
@@ -46,7 +46,7 @@ jobs:
         VERSION_NAME=1.0.${{ github.run_number }}
         if [[ "${{ github.event.inputs.buildType }}" == "release" ]]; then
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=/home/runner/work/time-nano/time-nano/app/keystore.jks \
+            -Pandroid.injected.signing.store.file=/home/runner/work/time-litert/time-litert/app/keystore.jks \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} \
