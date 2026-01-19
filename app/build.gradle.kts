@@ -17,6 +17,9 @@ android {
         androidResources {
             noCompress.add("tflite")
         }
+        ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
     }
 
     compileOptions {
