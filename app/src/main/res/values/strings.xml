@@ -5,4 +5,5 @@
     <string name="status_thinking">Thinking...</string>
     <string name="time_template">Time: %1$s</string>
     <string name="error_template">Error: %1$s</string>
+    <string name="show_overlay">Show Detection Overlay</string>
 </resources>

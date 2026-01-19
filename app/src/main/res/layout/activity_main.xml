@@ -4,11 +4,22 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <com.yourname.watchreader.OverlayView
+            android:id="@+id/overlayView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -16,10 +27,18 @@
         android:orientation="vertical"
         android:padding="24dp">
 
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/overlayToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/show_overlay"
+            android:checked="true" />
+
         <Button
             android:id="@+id/readButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:text="@string/action_read" />
 
         <TextView

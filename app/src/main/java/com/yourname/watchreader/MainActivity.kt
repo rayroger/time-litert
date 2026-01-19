@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
@@ -12,6 +13,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -38,6 +40,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var resultText: TextView
     private lateinit var previewView: PreviewView
+    private lateinit var overlayView: OverlayView
+    private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
     // Initialize MediaPipe Landmarker instead of ModelClient
@@ -97,12 +101,19 @@ class MainActivity : AppCompatActivity() {
 
         resultText = findViewById(R.id.resultText)
         previewView = findViewById(R.id.previewView)
+        overlayView = findViewById(R.id.overlayView)
+        overlayToggle = findViewById(R.id.overlayToggle)
         val readButton = findViewById<Button>(R.id.readButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         readButton.setOnClickListener {
             captureImage()
+        }
+        
+        overlayToggle.setOnCheckedChangeListener { _, isChecked ->
+            overlayView.isOverlayEnabled = isChecked
+            overlayView.invalidate()
         }
 		
 		// Initialize MediaPipe detectors here
@@ -209,16 +220,88 @@ class MainActivity : AppCompatActivity() {
 		if (results.detections().isNotEmpty()) {
 			val detection = results.detections()[0]
 			val box = detection.boundingBox()
-			resultText.text = "Watch detected at: ${box.left}, ${box.top}"
-			// Next step: apply hand-detection logic within this box
+			
+			// Scale coordinates from captured image to preview dimensions
+			val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
+			val scaleY = previewView.height.toFloat() / bitmap.height.toFloat()
+			
+			val scaledBox = RectF(
+			    box.left * scaleX,
+			    box.top * scaleY,
+			    box.right * scaleX,
+			    box.bottom * scaleY
+			)
+			
+			// Update overlay with detected box
+			runOnUiThread {
+			    overlayView.setDetectionBox(scaledBox)
+			}
+			
+			resultText.text = "Watch detected, analyzing time..."
+			
+			// Extract watch region and read time
+			val watchRegion = Bitmap.createBitmap(
+			    bitmap,
+			    box.left.toInt().coerceAtLeast(0),
+			    box.top.toInt().coerceAtLeast(0),
+			    (box.width().toInt()).coerceAtMost(bitmap.width - box.left.toInt()),
+			    (box.height().toInt()).coerceAtMost(bitmap.height - box.top.toInt())
+			)
+			
+			readTimeFromWatch(watchRegion)
 		} else {
+			runOnUiThread {
+			    overlayView.setDetectionBox(null)
+			}
 			resultText.text = "No watch found. Adjust lighting."
     }
 }
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
-        // Placeholder for future LiteRT implementation
-        resultText.text = "LiteRT implementation coming soon"
+        val landmarker = handLandmarker
+        if (landmarker == null) {
+            resultText.text = "Hand landmarker not initialized"
+            return
+        }
+        
+        try {
+            val mpImage = BitmapImageBuilder(bitmap).build()
+            val result = landmarker.detect(mpImage)
+            
+            if (result.landmarks().isNotEmpty()) {
+                val landmarks = result.landmarks()[0]
+                
+                // Extract key points for clock hands
+                // Assuming landmarks represent hour and minute hand tips and center
+                // This is a simplified approach - adjust indices based on actual model output
+                if (landmarks.size >= 3) {
+                    val center = PointF(
+                        landmarks[0].x() * bitmap.width,
+                        landmarks[0].y() * bitmap.height
+                    )
+                    val hourHandTip = PointF(
+                        landmarks[1].x() * bitmap.width,
+                        landmarks[1].y() * bitmap.height
+                    )
+                    val minuteHandTip = PointF(
+                        landmarks[2].x() * bitmap.width,
+                        landmarks[2].y() * bitmap.height
+                    )
+                    
+                    val time = calculateTime(center, hourHandTip, minuteHandTip)
+                    resultText.text = getString(R.string.time_template, time)
+                } else {
+                    resultText.text = "Could not detect clock hands clearly"
+                }
+            } else {
+                // Fallback: Use a simple approach based on image analysis
+                // This is a placeholder for more sophisticated analysis
+                resultText.text = "Clock hands not detected. Try a clearer image."
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading time from watch", e)
+            resultText.text = getString(R.string.error_template, e.message)
+        }
     }
 
     override fun onDestroy() {
