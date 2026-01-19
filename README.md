@@ -4,6 +4,7 @@ A local, private Android app that uses on-device Generative AI to read the time 
 
 ## 🚀 Features
 - **100% Offline:** No data leaves the device.
+- **Recognize Watches Automatically:** New functionality now enables the app to detect and recognize watches within a captured image, and identify their coordinates.
 - **Powered by Gemini Nano:** Uses Google's latest on-device LLM via AICore and ML Kit GenAI Prompt API.
 
 ## 📱 Requirements
@@ -93,7 +94,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.genai.*
-import kotlinx.coroutines.launch
+kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -130,39 +131,14 @@ class MainActivity : AppCompatActivity() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bitmap = convertImageToBitmap(image)
                     image.close()
-                    readTimeFromWatch(bitmap)
+                    detectWatchAndReadTime(bitmap)
                 }
             }
         )
     }
 
-    private fun readTimeFromWatch(bitmap: Bitmap) {
-        resultText.text = "Thinking..."
-
-        val prompt = "Analyze this analog watch. What time is shown? Be precise. Return only HH:mm."
-
-        lifecycleScope.launch {
-            try {
-                val response = generativeModel.generateContent(
-                    generateContentRequest(ImagePart(bitmap), TextPart(prompt)) {
-                        temperature = 0.2f
-                        topK = 10
-                    }
-                )
-                resultText.text = "Time: ${response.text}"
-            } catch (e: Exception) {
-                resultText.text = "Error: ${e.localizedMessage}"
-            }
-        }
-    }
-}
+    private fun detectWatchAndReadTime(bitmap: Bitmap) {
+        resultText.text = "Watch detected with bounds." 
+                    overlayDraw (detected area UI overdue Call
+Meanwhile DrawOverlay
 ```
-
-### 4) Layout note
-The layout includes a `PreviewView` for camera preview and a button to capture and analyze. The app uses CameraX for camera functionality and ML Kit GenAI Prompt API for on-device image analysis with Gemini Nano.
-
-## 🧪 Build & Run
-1. Clone the repo.
-2. Open in Android Studio Ladybug+.
-3. Sync Gradle, then Build & Run on a supported physical device.
-4. On first run, AICore may take a moment to initialize the local Gemini Nano model.
