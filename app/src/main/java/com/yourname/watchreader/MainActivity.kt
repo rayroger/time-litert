@@ -213,15 +213,20 @@ class MainActivity : AppCompatActivity() {
             val width = box.width().toInt().coerceAtMost(bitmap.width - left)
             val height = box.height().toInt().coerceAtMost(bitmap.height - top)
             
-            val watchRegion = Bitmap.createBitmap(
-                bitmap,
-                left,
-                top,
-                width,
-                height
-            )
-            
-            readTimeFromWatch(watchRegion)
+            // Validate dimensions before creating bitmap
+            if (width > 0 && height > 0) {
+                val watchRegion = Bitmap.createBitmap(
+                    bitmap,
+                    left,
+                    top,
+                    width,
+                    height
+                )
+                
+                readTimeFromWatch(watchRegion)
+            } else {
+                resultText.text = "Watch region too small to analyze"
+            }
         } else {
             // Clear overlay (already on UI thread)
             overlayView.setDetectionBox(null)
