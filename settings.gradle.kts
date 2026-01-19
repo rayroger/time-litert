@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "time-nano"
+rootProject.name = "time-litert"
 include(":app")
