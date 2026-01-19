@@ -1,18 +1,14 @@
-# Watch Reader AI (Gemini Nano Edition)
+# Watch Reader AI (LiteRt)
 
 A local, private Android app that uses on-device Generative AI to read the time from analog watches.
 
 ## 🚀 Features
 - **100% Offline:** No data leaves the device.
 - **Recognize Watches Automatically:** New functionality now enables the app to detect and recognize watches within a captured image, and identify their coordinates.
-- **Powered by Gemini Nano:** Uses Google's latest on-device LLM via AICore and ML Kit GenAI Prompt API.
+- **Powered by Gemini Nano:**  ML Kit   API.
 
 ## 📱 Requirements
-This app requires a device with **Android AICore** support:
-- Pixel 9, 9 Pro, 10+
-- Samsung S24, S25 Ultra
-- Android 15 or 16+
-- Minimum SDK 31 with compile/target SDK 35 (Android 15/16).
+
 
 ## 🛠️ Setup (2026-ready)
 The snippets below are the must-have files for an empty Views/Compose Activity project.
@@ -76,66 +72,7 @@ dependencies {
 ```
 
 ### 3) `MainActivity.kt`
-```kotlin
-package com.yourname.watchreader
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.os.Bundle
-import android.widget.Button
-import android.widget.TextView
-import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.*
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import com.google.mlkit.vision.genai.*
-kotlinx.coroutines.launch
-import java.util.concurrent.Executors
-
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var resultText: TextView
-    private lateinit var previewView: PreviewView
-    private val cameraExecutor = Executors.newSingleThreadExecutor()
-    private var imageCapture: ImageCapture? = null
-
-    private val generativeModel by lazy { Generation.getClient() }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        resultText = findViewById(R.id.resultText)
-        previewView = findViewById(R.id.previewView)
-        val readButton = findViewById<Button>(R.id.readButton)
-
-        readButton.setOnClickListener { captureAndAnalyze() }
-
-        // Request camera permission and start camera
-        when {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) 
-                == PackageManager.PERMISSION_GRANTED -> startCamera()
-            else -> requestCameraPermission()
-        }
-    }
-
-    private fun captureAndAnalyze() {
-        imageCapture?.takePicture(
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val bitmap = convertImageToBitmap(image)
-                    image.close()
-                    detectWatchAndReadTime(bitmap)
-                }
-            }
-        )
-    }
 
     private fun detectWatchAndReadTime(bitmap: Bitmap) {
         resultText.text = "Watch detected with bounds." 
