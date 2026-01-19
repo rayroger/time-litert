@@ -104,7 +104,16 @@ class MainActivity : AppCompatActivity() {
         readButton.setOnClickListener {
             captureImage()
         }
-
+		
+		// Initialize MediaPipe detectors here
+	    try {
+	        setupDetector()  // Initialize object detector for watch detection
+	        setupLocalModel()  // Initialize hand landmarker for time calculation
+	    } catch (e: Exception) {
+	        Log.e(TAG, "Failed to initialize detectors", e)
+	        resultText.text = "Initialization failed: ${e.message}"
+	    }
+		
         // Request camera permission
         when {
             ContextCompat.checkSelfPermission(
