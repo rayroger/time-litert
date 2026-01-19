@@ -90,7 +90,7 @@ class MainActivity : AppCompatActivity() {
         val hrAngle = Math.toDegrees(Math.atan2((hrTip.y - center.y).toDouble(), (hrTip.x - center.x).toDouble())) + 90
         val minAngle = Math.toDegrees(Math.atan2((minTip.y - center.y).toDouble(), (minTip.x - center.x).toDouble())) + 90
         
-        val hour = ((hrAngle.plus(360) % 360) / 30).toInt().let { if (it == 0) 12 else it }
+        val hour = ((hrAngle.plus(360) % 360) / 30).toInt().let { if (it == 0) 12 else if (it > 12) it - 12 else it }
         val minute = ((minAngle.plus(360) % 360) / 6).toInt()
         
         return String.format("%02d:%02d", hour, minute)
@@ -240,12 +240,17 @@ class MainActivity : AppCompatActivity() {
 			resultText.text = "Watch detected, analyzing time..."
 			
 			// Extract watch region and read time
+			val left = box.left.toInt().coerceAtLeast(0)
+			val top = box.top.toInt().coerceAtLeast(0)
+			val width = box.width().toInt().coerceAtMost(bitmap.width - left)
+			val height = box.height().toInt().coerceAtMost(bitmap.height - top)
+			
 			val watchRegion = Bitmap.createBitmap(
 			    bitmap,
-			    box.left.toInt().coerceAtLeast(0),
-			    box.top.toInt().coerceAtLeast(0),
-			    (box.width().toInt()).coerceAtMost(bitmap.width - box.left.toInt()),
-			    (box.height().toInt()).coerceAtMost(bitmap.height - box.top.toInt())
+			    left,
+			    top,
+			    width,
+			    height
 			)
 			
 			readTimeFromWatch(watchRegion)
@@ -272,8 +277,10 @@ class MainActivity : AppCompatActivity() {
                 val landmarks = result.landmarks()[0]
                 
                 // Extract key points for clock hands
-                // Assuming landmarks represent hour and minute hand tips and center
-                // This is a simplified approach - adjust indices based on actual model output
+                // Note: HandLandmarker detects hand landmarks, not clock hands.
+                // The model at watch_hands.tflite should be specifically trained for clock hands.
+                // landmarks[0] = clock center, landmarks[1] = hour hand tip, landmarks[2] = minute hand tip
+                // Adjust indices based on actual model output
                 if (landmarks.size >= 3) {
                     val center = PointF(
                         landmarks[0].x() * bitmap.width,

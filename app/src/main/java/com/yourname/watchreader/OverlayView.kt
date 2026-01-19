@@ -30,8 +30,10 @@ class OverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (isOverlayEnabled && detectionBox != null) {
-            canvas.drawRect(detectionBox!!, paint)
+        if (isOverlayEnabled) {
+            detectionBox?.let { 
+                canvas.drawRect(it, paint)
+            }
         }
     }
 }
