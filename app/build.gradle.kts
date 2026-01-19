@@ -54,7 +54,9 @@ dependencies {
     implementation(libs.lifecycle.runtime.ktx)
     // 2. ADD LiteRT and MediaPipe
     implementation("com.google.ai.edge.litert:litert:1.0.1")
-    implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    implementation("com.google.mediapipe:tasks-vision:0.10.14") {    
+        exclude("org.tensorflow", "tensorflow-lite-api")
+    }
     implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
 }
