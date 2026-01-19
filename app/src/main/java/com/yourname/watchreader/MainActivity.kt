@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
-	private var objectDetector: ObjectDetector? = null
+    private var objectDetector: ObjectDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -52,8 +52,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
         }
     }
-	
-	private fun setupDetector() {
+    
+    private fun setupDetector() {
         val baseOptions = BaseOptions.builder()
             .setModelAssetPath("clock_detector.tflite")
             .build()
@@ -86,15 +86,15 @@ class MainActivity : AppCompatActivity() {
             overlayView.isOverlayEnabled = isChecked
             overlayView.invalidate()
         }
-		
-		// Initialize MediaPipe detector
-	    try {
-	        setupDetector()  // Initialize object detector for watch detection
-	    } catch (e: Exception) {
-	        Log.e(TAG, "Failed to initialize detector", e)
-	        resultText.text = "Initialization failed: ${e.message}"
-	    }
-		
+        
+        // Initialize MediaPipe detector
+        try {
+            setupDetector()  // Initialize object detector for watch detection
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize detector", e)
+            resultText.text = "Initialization failed: ${e.message}"
+        }
+        
         // Request camera permission
         when {
             ContextCompat.checkSelfPermission(
@@ -176,58 +176,58 @@ class MainActivity : AppCompatActivity() {
         
         return bitmap
     }
-	
-	private fun readTimeLocally(bitmap: Bitmap) {
+    
+    private fun readTimeLocally(bitmap: Bitmap) {
         val detector = objectDetector
         if (detector == null) {
             resultText.text = "Object detector not initialized"
             return
         }
         
-		val mpImage = BitmapImageBuilder(bitmap).build()
-		val results = detector.detect(mpImage)
+        val mpImage = BitmapImageBuilder(bitmap).build()
+        val results = detector.detect(mpImage)
 
-		if (results.detections().isNotEmpty()) {
-			val detection = results.detections()[0]
-			val box = detection.boundingBox()
-			
-			// Scale coordinates from captured image to preview dimensions
-			val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
-			val scaleY = previewView.height.toFloat() / bitmap.height.toFloat()
-			
-			val scaledBox = RectF(
-			    box.left * scaleX,
-			    box.top * scaleY,
-			    box.right * scaleX,
-			    box.bottom * scaleY
-			)
-			
-			// Update overlay with detected box (already on UI thread)
-			overlayView.setDetectionBox(scaledBox)
-			
-			resultText.text = "Watch detected, analyzing time..."
-			
-			// Extract watch region and read time
-			val left = box.left.toInt().coerceAtLeast(0)
-			val top = box.top.toInt().coerceAtLeast(0)
-			val width = box.width().toInt().coerceAtMost(bitmap.width - left)
-			val height = box.height().toInt().coerceAtMost(bitmap.height - top)
-			
-			val watchRegion = Bitmap.createBitmap(
-			    bitmap,
-			    left,
-			    top,
-			    width,
-			    height
-			)
-			
-			readTimeFromWatch(watchRegion)
-		} else {
-			// Clear overlay (already on UI thread)
-			overlayView.setDetectionBox(null)
-			resultText.text = "No watch found. Adjust lighting."
+        if (results.detections().isNotEmpty()) {
+            val detection = results.detections()[0]
+            val box = detection.boundingBox()
+            
+            // Scale coordinates from captured image to preview dimensions
+            val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
+            val scaleY = previewView.height.toFloat() / bitmap.height.toFloat()
+            
+            val scaledBox = RectF(
+                box.left * scaleX,
+                box.top * scaleY,
+                box.right * scaleX,
+                box.bottom * scaleY
+            )
+            
+            // Update overlay with detected box (already on UI thread)
+            overlayView.setDetectionBox(scaledBox)
+            
+            resultText.text = "Watch detected, analyzing time..."
+            
+            // Extract watch region and read time
+            val left = box.left.toInt().coerceAtLeast(0)
+            val top = box.top.toInt().coerceAtLeast(0)
+            val width = box.width().toInt().coerceAtMost(bitmap.width - left)
+            val height = box.height().toInt().coerceAtMost(bitmap.height - top)
+            
+            val watchRegion = Bitmap.createBitmap(
+                bitmap,
+                left,
+                top,
+                width,
+                height
+            )
+            
+            readTimeFromWatch(watchRegion)
+        } else {
+            // Clear overlay (already on UI thread)
+            overlayView.setDetectionBox(null)
+            resultText.text = "No watch found. Adjust lighting."
+        }
     }
-}
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
         // TODO: Implement time recognition using an appropriate method
