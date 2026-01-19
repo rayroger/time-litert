@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
@@ -12,6 +13,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -22,10 +24,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import com.google.mediapipe.tasks.core.BaseOptions
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
-import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.framework.image.BitmapImageBuilder
-import android.graphics.PointF
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -38,11 +37,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var resultText: TextView
     private lateinit var previewView: PreviewView
+    private lateinit var overlayView: OverlayView
+    private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
-    // Initialize MediaPipe Landmarker instead of ModelClient
-    private var handLandmarker: HandLandmarker? = null
-	private var objectDetector: ObjectDetector? = null
+    private var objectDetector: ObjectDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -53,43 +52,19 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
         }
     }
-	
-	private fun setupDetector() {
-    val baseOptions = BaseOptions.builder()
-        .setModelAssetPath("clock_detector.tflite")
-        .build()
-
-    val options = ObjectDetector.ObjectDetectorOptions.builder()
-        .setBaseOptions(baseOptions)
-        .setScoreThreshold(0.3f) // Lower for older cameras like the Zebra
-        .setMaxResults(1)
-        .build()
-
-    objectDetector = ObjectDetector.createFromOptions(this, options)
-}
     
-    private fun setupLocalModel() {
+    private fun setupDetector() {
         val baseOptions = BaseOptions.builder()
-            .setModelAssetPath("watch_hands.tflite") // You will add this file to /assets
+            .setModelAssetPath("clock_detector.tflite")
             .build()
-            
-        val options = HandLandmarker.HandLandmarkerOptions.builder()
+
+        val options = ObjectDetector.ObjectDetectorOptions.builder()
             .setBaseOptions(baseOptions)
-            .setRunningMode(RunningMode.IMAGE)
+            .setScoreThreshold(0.3f) // Lower for older cameras like the Zebra
+            .setMaxResults(1)
             .build()
-            
-        handLandmarker = HandLandmarker.createFromOptions(this, options)
-    }
-    
-    // Math logic to calculate time from detected coordinates
-    private fun calculateTime(center: PointF, hrTip: PointF, minTip: PointF): String {
-        val hrAngle = Math.toDegrees(Math.atan2((hrTip.y - center.y).toDouble(), (hrTip.x - center.x).toDouble())) + 90
-        val minAngle = Math.toDegrees(Math.atan2((minTip.y - center.y).toDouble(), (minTip.x - center.x).toDouble())) + 90
-        
-        val hour = ((hrAngle.plus(360) % 360) / 30).toInt().let { if (it == 0) 12 else it }
-        val minute = ((minAngle.plus(360) % 360) / 6).toInt()
-        
-        return String.format("%02d:%02d", hour, minute)
+
+        objectDetector = ObjectDetector.createFromOptions(this, options)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,6 +72,8 @@ class MainActivity : AppCompatActivity() {
 
         resultText = findViewById(R.id.resultText)
         previewView = findViewById(R.id.previewView)
+        overlayView = findViewById(R.id.overlayView)
+        overlayToggle = findViewById(R.id.overlayToggle)
         val readButton = findViewById<Button>(R.id.readButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -104,16 +81,20 @@ class MainActivity : AppCompatActivity() {
         readButton.setOnClickListener {
             captureImage()
         }
-		
-		// Initialize MediaPipe detectors here
-	    try {
-	        setupDetector()  // Initialize object detector for watch detection
-	        setupLocalModel()  // Initialize hand landmarker for time calculation
-	    } catch (e: Exception) {
-	        Log.e(TAG, "Failed to initialize detectors", e)
-	        resultText.text = "Initialization failed: ${e.message}"
-	    }
-		
+        
+        overlayToggle.setOnCheckedChangeListener { _, isChecked ->
+            overlayView.isOverlayEnabled = isChecked
+            overlayView.invalidate()
+        }
+        
+        // Initialize MediaPipe detector
+        try {
+            setupDetector()  // Initialize object detector for watch detection
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize detector", e)
+            resultText.text = "Initialization failed: ${e.message}"
+        }
+        
         // Request camera permission
         when {
             ContextCompat.checkSelfPermission(
@@ -195,30 +176,86 @@ class MainActivity : AppCompatActivity() {
         
         return bitmap
     }
-	
-	private fun readTimeLocally(bitmap: Bitmap) {
+    
+    private fun readTimeLocally(bitmap: Bitmap) {
         val detector = objectDetector
         if (detector == null) {
             resultText.text = "Object detector not initialized"
             return
         }
         
-		val mpImage = BitmapImageBuilder(bitmap).build()
-		val results = detector.detect(mpImage)
+        val mpImage = BitmapImageBuilder(bitmap).build()
+        val results = detector.detect(mpImage)
 
-		if (results.detections().isNotEmpty()) {
-			val detection = results.detections()[0]
-			val box = detection.boundingBox()
-			resultText.text = "Watch detected at: ${box.left}, ${box.top}"
-			// Next step: apply hand-detection logic within this box
-		} else {
-			resultText.text = "No watch found. Adjust lighting."
+        if (results.detections().isNotEmpty()) {
+            val detection = results.detections()[0]
+            val box = detection.boundingBox()
+            
+            // Scale coordinates from captured image to preview dimensions
+            val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
+            val scaleY = previewView.height.toFloat() / bitmap.height.toFloat()
+            
+            val scaledBox = RectF(
+                box.left * scaleX,
+                box.top * scaleY,
+                box.right * scaleX,
+                box.bottom * scaleY
+            )
+            
+            // Update overlay with detected box (already on UI thread)
+            overlayView.setDetectionBox(scaledBox)
+            
+            resultText.text = "Watch detected, analyzing time..."
+            
+            // Extract watch region and read time
+            val left = box.left.toInt().coerceAtLeast(0)
+            val top = box.top.toInt().coerceAtLeast(0)
+            val width = box.width().toInt().coerceAtMost(bitmap.width - left)
+            val height = box.height().toInt().coerceAtMost(bitmap.height - top)
+            
+            // Validate dimensions before creating bitmap
+            if (width > 0 && height > 0) {
+                val watchRegion = Bitmap.createBitmap(
+                    bitmap,
+                    left,
+                    top,
+                    width,
+                    height
+                )
+                
+                readTimeFromWatch(watchRegion)
+            } else {
+                resultText.text = "Watch region too small to analyze"
+            }
+        } else {
+            // Clear overlay (already on UI thread)
+            overlayView.setDetectionBox(null)
+            resultText.text = "No watch found. Adjust lighting."
+        }
     }
-}
 
     private fun readTimeFromWatch(bitmap: Bitmap) {
-        // Placeholder for future LiteRT implementation
-        resultText.text = "LiteRT implementation coming soon"
+        // TODO: Implement time recognition using an appropriate method
+        // Options include:
+        // 1. Custom TensorFlow Lite model trained specifically for clock hand detection
+        // 2. Computer vision techniques (Hough transform for line detection)
+        // 3. OCR for digital watches
+        // 4. Integration with a specialized time-reading API
+        
+        try {
+            // Placeholder: For now, indicate that watch was detected but time reading
+            // requires a proper clock hand detection model
+            resultText.text = "Watch detected! Time recognition requires a specialized clock hand detection model."
+            
+            // When implementing, the approach should:
+            // - Detect clock hands (hour and minute hands) in the watch region
+            // - Calculate angles of each hand relative to 12 o'clock position
+            // - Convert angles to time in HH:mm format
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading time from watch", e)
+            resultText.text = getString(R.string.error_template, e.message)
+        }
     }
 
     override fun onDestroy() {
