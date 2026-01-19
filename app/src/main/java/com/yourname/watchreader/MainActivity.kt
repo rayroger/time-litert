@@ -20,11 +20,12 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import com.google.mediapipe.tasks.vision.core.BaseOptions
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.framework.image.BitmapImageBuilder
-import kotlinx.coroutines.launch
+import android.graphics.PointF
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -40,8 +41,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
     // Initialize MediaPipe Landmarker instead of ModelClient
-    private lateinit var handLandmarker: HandLandmarker
-	private lateinit var objectDetector: ObjectDetector
+    private var handLandmarker: HandLandmarker? = null
+	private var objectDetector: ObjectDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -51,13 +52,6 @@ class MainActivity : AppCompatActivity() {
         } else {
             Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
         }
-    }
-
-    private val generativeModel: GenerativeModel by lazy {
-        GenerativeModel(
-            modelName = "gemini-1.5-flash",
-            apiKey = BuildConfig.GEMINI_API_KEY
-        )
     }
 	
 	private fun setupDetector() {
@@ -88,7 +82,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     // Math logic to calculate time from detected coordinates
-    private fun calculateTime(center: Point, hrTip: Point, minTip: Point): String {
+    private fun calculateTime(center: PointF, hrTip: PointF, minTip: PointF): String {
         val hrAngle = Math.toDegrees(Math.atan2((hrTip.y - center.y).toDouble(), (hrTip.x - center.x).toDouble())) + 90
         val minAngle = Math.toDegrees(Math.atan2((minTip.y - center.y).toDouble(), (minTip.x - center.x).toDouble())) + 90
         
@@ -194,8 +188,14 @@ class MainActivity : AppCompatActivity() {
     }
 	
 	private fun readTimeLocally(bitmap: Bitmap) {
+        val detector = objectDetector
+        if (detector == null) {
+            resultText.text = "Object detector not initialized"
+            return
+        }
+        
 		val mpImage = BitmapImageBuilder(bitmap).build()
-		val results = objectDetector.detect(mpImage)
+		val results = detector.detect(mpImage)
 
 		if (results.detections().isNotEmpty()) {
 			val detection = results.detections()[0]
