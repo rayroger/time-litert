@@ -4,8 +4,32 @@ A local, private Android app that uses on-device Generative AI to read the time 
 
 ## 🚀 Features
 - **100% Offline:** No data leaves the device.
-- **Recognize Watches Automatically:** New functionality now enables the app to detect and recognize watches within a captured image, and identify their coordinates.
+- **Recognize Watches Automatically:** New functionality now enables the app to detect and recognize watches within a captured image, and identify their coordinates, including scenes with **multiple watches at once**.
 - **Powered by Gemini Nano:**  ML Kit   API.
+
+## 📂 Training Data Capture Mode
+
+`TrainingCaptureActivity` periodically captures photos, detects every watch in frame, and saves:
+- `capture_<n>_annotated.jpg` — the full photo with a green bounding box per detected watch.
+- `capture_<n>_watch_<m>.jpg` — a cropped image for each detected watch.
+
+Captures are written to the **public, externally-visible** media collection
+`Pictures/WatchReaderTrainingData/<session-timestamp>/`, so they:
+- Show up in a file manager or gallery app (no `adb`/root required).
+- Survive uninstalling the app.
+
+On Android 10+ this uses the `MediaStore` API (no extra permission needed). On Android 9 and
+below it writes directly to the legacy public Pictures directory and requests the
+`WRITE_EXTERNAL_STORAGE` runtime permission (declared with `maxSdkVersion="28"` in the manifest).
+
+### Uploading captures to a PC
+
+Training Data Capture mode includes a **"Start Upload Server"** button that starts a small
+embedded HTTP server (via [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd)) on port `8080`.
+While running, the screen shows the device's local Wi-Fi IP address, e.g.
+`http://192.168.1.42:8080`. Open that address from any PC browser on the same Wi-Fi network (or
+`curl`/`wget` it) to see a list of all saved captures and download them individually — no `adb
+pull` needed. Tap **"Stop Upload Server"** when you're done to free the port.
 
 ## 📱 Requirements
 

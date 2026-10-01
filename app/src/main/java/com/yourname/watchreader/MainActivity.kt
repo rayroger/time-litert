@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val MAX_DETECTIONS_PER_CAPTURE = 10
     }
 
     private lateinit var resultText: TextView
@@ -52,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupDetector() {
-        watchDetector = WatchDetector(this, maxResults = 1)
+        watchDetector = WatchDetector(this, maxResults = MAX_DETECTIONS_PER_CAPTURE)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -177,55 +178,56 @@ class MainActivity : AppCompatActivity() {
             return
         }
         
+        // Detect every watch present in the frame, not just the first one.
         val detections = detector.detectWatches(bitmap)
 
         if (detections.isNotEmpty()) {
-            val box = detections[0]
-            
             // Scale coordinates from captured image to preview dimensions
             val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
             val scaleY = previewView.height.toFloat() / bitmap.height.toFloat()
-            
-            val scaledBox = RectF(
-                box.left * scaleX,
-                box.top * scaleY,
-                box.right * scaleX,
-                box.bottom * scaleY
-            )
-            
-            // Update overlay with detected box (already on UI thread)
-            overlayView.setDetectionBox(scaledBox)
-            
-            resultText.text = "Watch detected, analyzing time..."
-            
-            // Extract watch region and read time
-            val left = box.left.toInt().coerceAtLeast(0)
-            val top = box.top.toInt().coerceAtLeast(0)
-            val width = box.width().toInt().coerceAtMost(bitmap.width - left)
-            val height = box.height().toInt().coerceAtMost(bitmap.height - top)
-            
-            // Validate dimensions before creating bitmap
-            if (width > 0 && height > 0) {
-                val watchRegion = Bitmap.createBitmap(
-                    bitmap,
-                    left,
-                    top,
-                    width,
-                    height
+
+            val scaledBoxes = detections.map { box ->
+                RectF(
+                    box.left * scaleX,
+                    box.top * scaleY,
+                    box.right * scaleX,
+                    box.bottom * scaleY
                 )
-                
-                readTimeFromWatch(watchRegion)
-            } else {
-                resultText.text = "Watch region too small to analyze"
             }
+
+            // Update overlay with all detected boxes (already on UI thread)
+            overlayView.setDetectionBoxes(scaledBoxes)
+
+            // Extract each watch region and read time for every detection.
+            val watchLines = detections.mapIndexed { index, box ->
+                val left = box.left.toInt().coerceAtLeast(0)
+                val top = box.top.toInt().coerceAtLeast(0)
+                val width = box.width().toInt().coerceAtMost(bitmap.width - left)
+                val height = box.height().toInt().coerceAtMost(bitmap.height - top)
+
+                // Validate dimensions before creating bitmap
+                if (width > 0 && height > 0) {
+                    val watchRegion = Bitmap.createBitmap(bitmap, left, top, width, height)
+                    readTimeFromWatch(watchRegion, index + 1)
+                } else {
+                    getString(R.string.watch_region_too_small, index + 1)
+                }
+            }
+
+            resultText.text = getString(R.string.watches_found_template, detections.size) +
+                "\n" + watchLines.joinToString("\n")
         } else {
             // Clear overlay (already on UI thread)
-            overlayView.setDetectionBox(null)
-            resultText.text = "No watch found. Adjust lighting."
+            overlayView.setDetectionBoxes(emptyList())
+            resultText.text = getString(R.string.status_no_watch)
         }
     }
 
-    private fun readTimeFromWatch(bitmap: Bitmap) {
+    /**
+     * Returns a one-line status for the watch found in [bitmap], identified by [index]
+     * (1-based, matching the order it was detected in).
+     */
+    private fun readTimeFromWatch(bitmap: Bitmap, index: Int): String {
         // TODO: Implement time recognition using an appropriate method
         // Options include:
         // 1. Custom TensorFlow Lite model trained specifically for clock hand detection
@@ -233,10 +235,10 @@ class MainActivity : AppCompatActivity() {
         // 3. OCR for digital watches
         // 4. Integration with a specialized time-reading API
         
-        try {
+        return try {
             // Placeholder: For now, indicate that watch was detected but time reading
             // requires a proper clock hand detection model
-            resultText.text = "Watch detected! Time recognition requires a specialized clock hand detection model."
+            getString(R.string.watch_time_placeholder, index)
             
             // When implementing, the approach should:
             // - Detect clock hands (hour and minute hands) in the watch region
@@ -244,8 +246,8 @@ class MainActivity : AppCompatActivity() {
             // - Convert angles to time in HH:mm format
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error reading time from watch", e)
-            resultText.text = getString(R.string.error_template, e.message)
+            Log.e(TAG, "Error reading time from watch $index", e)
+            getString(R.string.error_template, e.message)
         }
     }
 
