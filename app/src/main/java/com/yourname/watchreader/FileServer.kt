@@ -25,7 +25,7 @@ import java.util.UUID
 class FileServer(
     private val context: Context,
     port: Int = DEFAULT_PORT,
-    val accessToken: String = UUID.randomUUID().toString().substring(0, 8)
+    val accessToken: String = UUID.randomUUID().toString()
 ) : NanoHTTPD(port) {
 
     private data class MediaEntry(val id: Long, val displayName: String)
@@ -69,6 +69,13 @@ class FileServer(
         val id = idSegment.substringBefore('?').toLongOrNull()
             ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Invalid file id")
 
+        // Make sure the requested id actually belongs to the training-data collection before
+        // opening it, so a client with a valid token can't enumerate ids to read arbitrary
+        // images (e.g. personal photos) elsewhere on the device.
+        if (!isWithinTrainingData(id)) {
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Not part of the training-data collection")
+        }
+
         val mediaUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
         val stream = try {
             context.contentResolver.openInputStream(mediaUri)
@@ -78,6 +85,33 @@ class FileServer(
 
         return newChunkedResponse(Response.Status.OK, "image/jpeg", stream)
     }
+
+    /** Returns true only if [id] refers to an image inside the training-data collection. */
+    private fun isWithinTrainingData(id: Long): Boolean {
+        val useRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val pathColumn = if (useRelativePath) MediaStore.Images.Media.RELATIVE_PATH else MediaStore.Images.Media.DATA
+        val selection = "${MediaStore.Images.Media._ID} = ? AND $pathColumn LIKE ?"
+        val selectionArgs = arrayOf(id.toString(), trainingDataLikePattern(useRelativePath))
+
+        return try {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID),
+                selection,
+                selectionArgs,
+                null
+            )?.use { cursor -> cursor.moveToFirst() } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun trainingDataLikePattern(useRelativePath: Boolean): String =
+        if (useRelativePath) {
+            "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
+        } else {
+            "%/${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
+        }
 
     /** Queries MediaStore for every image saved under the training-data collection. */
     private fun queryEntries(): List<MediaEntry> {
@@ -97,13 +131,7 @@ class FileServer(
         // substring) so we don't accidentally pick up unrelated media whose path happens to
         // contain the same marker text.
         val selection = "$pathColumn LIKE ?"
-        val selectionArgs = arrayOf(
-            if (useRelativePath) {
-                "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
-            } else {
-                "%/${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
-            }
-        )
+        val selectionArgs = arrayOf(trainingDataLikePattern(useRelativePath))
 
         try {
             context.contentResolver.query(
