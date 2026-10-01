@@ -56,6 +56,7 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.lifecycle.runtime.ktx)
+    implementation(libs.kotlinx.coroutines.android)
     // 2. ADD LiteRT and MediaPipe
     //implementation("com.google.ai.edge.litert:litert:1.0.1")
     implementation("com.google.mediapipe:tasks-vision:0.10.14") {    
