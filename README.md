@@ -26,10 +26,17 @@ below it writes directly to the legacy public Pictures directory and requests th
 
 Training Data Capture mode includes a **"Start Upload Server"** button that starts a small
 embedded HTTP server (via [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd)) on port `8080`.
-While running, the screen shows the device's local Wi-Fi IP address, e.g.
-`http://192.168.1.42:8080`. Open that address from any PC browser on the same Wi-Fi network (or
-`curl`/`wget` it) to see a list of all saved captures and download them individually — no `adb
-pull` needed. Tap **"Stop Upload Server"** when you're done to free the port.
+While running, the screen shows the device's local Wi-Fi IP address and a one-time access
+token appended as a URL, e.g. `http://192.168.1.42:8080/?token=<random-uuid>`. Open that exact
+address from any PC browser on the same Wi-Fi network (or `curl`/`wget` it) to see a list of all
+saved captures and download them individually — no `adb pull` needed.
+
+The token is required because the server has no other authentication, and is regenerated every
+time the server is (re)started. The very first request must include `?token=...`; after that the
+server sets a session cookie so you can keep browsing/downloading without repeating the token in
+every link (keeping it out of browser history/Referer headers for subsequent navigation). Only
+share the printed URL with people/PCs you trust on your Wi-Fi network. Tap **"Stop Upload
+Server"** when you're done to free the port.
 
 ## 📱 Requirements
 

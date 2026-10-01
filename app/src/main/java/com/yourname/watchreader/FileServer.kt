@@ -20,8 +20,10 @@ import java.util.UUID
  * raw file paths, so this works the same way whether the captures were written via MediaStore
  * (Android 10+) or to the legacy public Pictures directory (Android 9 and below).
  *
- * Every request must include the generated [accessToken] as a `token` query parameter so that
- * other devices on the same Wi-Fi network can't silently browse/download captures.
+ * Every request must include the generated [accessToken] as a `token` query parameter (only
+ * needed for the very first request; the server then issues a session cookie so later
+ * requests from the same browser don't need to repeat the token in the URL) so that other
+ * devices on the same Wi-Fi network can't silently browse/download captures.
  */
 class FileServer(
     private val context: Context,
@@ -32,16 +34,29 @@ class FileServer(
     private data class MediaEntry(val id: Long, val displayName: String)
 
     override fun serve(session: IHTTPSession): Response {
-        if (!isValidToken(session.parms["token"])) {
+        val cookieToken = extractCookieToken(session.headers["cookie"])
+        val queryToken = session.parms["token"]
+        val authenticated = isValidToken(cookieToken) || isValidToken(queryToken)
+
+        if (!authenticated) {
             return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden: missing or invalid token")
         }
 
         val uri = session.uri
-        return when {
+        val response = when {
             uri == "/" -> serveIndex()
             uri.startsWith("/file/") -> serveFile(uri.removePrefix("/file/"))
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
         }
+
+        // The first request typically authenticates via the token embedded in the shared
+        // link. Once that happens, hand the browser a session cookie so subsequent page/file
+        // requests from the same browser don't need to keep carrying the token in the URL
+        // (where it could otherwise leak into browser history, proxy logs, or Referer headers).
+        if (!isValidToken(cookieToken) && isValidToken(queryToken)) {
+            response.addHeader("Set-Cookie", "$SESSION_COOKIE_NAME=$accessToken; Path=/; HttpOnly; SameSite=Strict")
+        }
+        return response
     }
 
     /** Constant-time token comparison to avoid leaking the token via response-timing side channels. */
@@ -51,6 +66,14 @@ class FileServer(
             provided.toByteArray(Charsets.UTF_8),
             accessToken.toByteArray(Charsets.UTF_8)
         )
+    }
+
+    private fun extractCookieToken(cookieHeader: String?): String? {
+        if (cookieHeader == null) return null
+        return cookieHeader.split(";")
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("$SESSION_COOKIE_NAME=") }
+            ?.substringAfter("=")
     }
 
     private fun serveIndex(): Response {
@@ -64,7 +87,9 @@ class FileServer(
                 append("<ul>")
                 entries.forEach { entry ->
                     val safeName = Html.escapeHtml(entry.displayName)
-                    append("<li><a href=\"/file/${entry.id}?token=$accessToken\">$safeName</a></li>")
+                    // No token query param here: the session cookie set on first load (see
+                    // [serve]) authenticates these follow-up requests instead.
+                    append("<li><a href=\"/file/${entry.id}\">$safeName</a></li>")
                 }
                 append("</ul>")
             }
@@ -74,9 +99,9 @@ class FileServer(
     }
 
     private fun serveFile(idSegment: String): Response {
-        // idSegment may still carry the query string component NanoHTTPD leaves attached
-        // to the raw uri in some versions; strip it defensively before parsing the id.
-        val id = idSegment.substringBefore('?').toLongOrNull()
+        // NanoHTTPD's session.uri already excludes the query string (available separately
+        // via session.parms), so idSegment is just the path segment after "/file/".
+        val id = idSegment.toLongOrNull()
             ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Invalid file id")
 
         // Make sure the requested id actually belongs to the training-data collection before
@@ -168,5 +193,7 @@ class FileServer(
 
         /** Public sub-folder of Pictures/ shared with [TrainingCaptureActivity]'s storage location. */
         const val TRAINING_DATA_DIR = "WatchReaderTrainingData"
+
+        private const val SESSION_COOKIE_NAME = "watchreader_session"
     }
 }
