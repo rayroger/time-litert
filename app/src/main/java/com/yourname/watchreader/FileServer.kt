@@ -21,9 +21,10 @@ import java.util.UUID
  * (Android 10+) or to the legacy public Pictures directory (Android 9 and below).
  *
  * Every request must include the generated [accessToken] as a `token` query parameter (only
- * needed for the very first request; the server then issues a session cookie so later
- * requests from the same browser don't need to repeat the token in the URL) so that other
- * devices on the same Wi-Fi network can't silently browse/download captures.
+ * needed for the very first request; the server then issues a time-limited session cookie,
+ * renewed on each authenticated request, so later requests from the same browser don't need
+ * to repeat the token in the URL) so that other devices on the same Wi-Fi network can't
+ * silently browse/download captures.
  */
 class FileServer(
     private val context: Context,
@@ -41,6 +42,10 @@ class FileServer(
      */
     private val sessionToken: String = UUID.randomUUID().toString()
 
+    /** Wall-clock time (millis) after which [sessionToken] stops being accepted; 0 = never issued yet. */
+    @Volatile
+    private var sessionExpiresAtMillis: Long = 0L
+
     override fun serve(session: IHTTPSession): Response {
         val cookieToken = extractCookieToken(session.headers["cookie"])
         val queryToken = session.parms["token"]
@@ -48,7 +53,7 @@ class FileServer(
         val authenticatedByQuery = isValidToken(queryToken)
 
         if (!authenticatedByCookie && !authenticatedByQuery) {
-            return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden: missing or invalid token")
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden: missing, invalid, or expired session")
         }
 
         val uri = session.uri
@@ -62,9 +67,16 @@ class FileServer(
         // link. Once that happens, hand the browser a session cookie (a separate identifier
         // from accessToken, see [sessionToken]) so subsequent page/file requests from the
         // same browser don't need to keep carrying the original token in the URL (where it
-        // could otherwise leak into browser history, proxy logs, or Referer headers).
-        if (!authenticatedByCookie && authenticatedByQuery) {
-            response.addHeader("Set-Cookie", "$SESSION_COOKIE_NAME=$sessionToken; Path=/; HttpOnly; SameSite=Strict")
+        // could otherwise leak into browser history, proxy logs, or Referer headers). The
+        // cookie is time-limited (see SESSION_TTL_MILLIS) and is re-issued/extended on every
+        // authenticated request, so a leaked cookie only grants access for a bounded window
+        // of inactivity rather than indefinitely until the server process is restarted.
+        if (authenticatedByCookie || authenticatedByQuery) {
+            sessionExpiresAtMillis = System.currentTimeMillis() + SESSION_TTL_MILLIS
+            response.addHeader(
+                "Set-Cookie",
+                "$SESSION_COOKIE_NAME=$sessionToken; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MILLIS / 1000}"
+            )
         }
         return response
     }
@@ -78,13 +90,17 @@ class FileServer(
         )
     }
 
-    /** Constant-time comparison against the session-only cookie identifier (see [sessionToken]). */
+    /**
+     * Constant-time comparison against the session-only cookie identifier (see [sessionToken]),
+     * additionally requiring the session to not have expired (see [sessionExpiresAtMillis]).
+     */
     private fun isValidSessionToken(provided: String?): Boolean {
         if (provided == null) return false
-        return MessageDigest.isEqual(
+        val matches = MessageDigest.isEqual(
             provided.toByteArray(Charsets.UTF_8),
             sessionToken.toByteArray(Charsets.UTF_8)
         )
+        return matches && System.currentTimeMillis() < sessionExpiresAtMillis
     }
 
     private fun extractCookieToken(cookieHeader: String?): String? {
@@ -216,5 +232,8 @@ class FileServer(
         const val TRAINING_DATA_DIR = "WatchReaderTrainingData"
 
         private const val SESSION_COOKIE_NAME = "watchreader_session"
+
+        /** How long a browser session cookie remains valid since it was last used/renewed. */
+        private const val SESSION_TTL_MILLIS = 30 * 60 * 1000L
     }
 }

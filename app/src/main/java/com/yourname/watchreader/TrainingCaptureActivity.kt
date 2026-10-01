@@ -60,8 +60,12 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val DEFAULT_INTERVAL_SECONDS = 5L
         private const val MIN_INTERVAL_SECONDS = 1L
 
-        /** Public sub-folder of Pictures/ where training captures are saved. */
-        private const val TRAINING_DATA_DIR = "WatchReaderTrainingData"
+        /**
+         * Public sub-folder of Pictures/ where training captures are saved. Shared with
+         * [FileServer], which scopes its listing/serving to this same folder, so both
+         * classes reference [FileServer.TRAINING_DATA_DIR] rather than duplicating the value.
+         */
+        private val TRAINING_DATA_DIR = FileServer.TRAINING_DATA_DIR
     }
 
     private lateinit var previewView: PreviewView
