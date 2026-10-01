@@ -33,12 +33,21 @@ class FileServer(
 
     private data class MediaEntry(val id: Long, val displayName: String)
 
+    /**
+     * Separate, independently-generated identifier used only for the browser session cookie.
+     * Kept distinct from [accessToken] so that if the cookie is ever exposed (e.g. captured on
+     * an unencrypted network), it doesn't also reveal the original token embedded in the
+     * printed/shared URL.
+     */
+    private val sessionToken: String = UUID.randomUUID().toString()
+
     override fun serve(session: IHTTPSession): Response {
         val cookieToken = extractCookieToken(session.headers["cookie"])
         val queryToken = session.parms["token"]
-        val authenticated = isValidToken(cookieToken) || isValidToken(queryToken)
+        val authenticatedByCookie = isValidSessionToken(cookieToken)
+        val authenticatedByQuery = isValidToken(queryToken)
 
-        if (!authenticated) {
+        if (!authenticatedByCookie && !authenticatedByQuery) {
             return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden: missing or invalid token")
         }
 
@@ -50,11 +59,12 @@ class FileServer(
         }
 
         // The first request typically authenticates via the token embedded in the shared
-        // link. Once that happens, hand the browser a session cookie so subsequent page/file
-        // requests from the same browser don't need to keep carrying the token in the URL
-        // (where it could otherwise leak into browser history, proxy logs, or Referer headers).
-        if (!isValidToken(cookieToken) && isValidToken(queryToken)) {
-            response.addHeader("Set-Cookie", "$SESSION_COOKIE_NAME=$accessToken; Path=/; HttpOnly; SameSite=Strict")
+        // link. Once that happens, hand the browser a session cookie (a separate identifier
+        // from accessToken, see [sessionToken]) so subsequent page/file requests from the
+        // same browser don't need to keep carrying the original token in the URL (where it
+        // could otherwise leak into browser history, proxy logs, or Referer headers).
+        if (!authenticatedByCookie && authenticatedByQuery) {
+            response.addHeader("Set-Cookie", "$SESSION_COOKIE_NAME=$sessionToken; Path=/; HttpOnly; SameSite=Strict")
         }
         return response
     }
@@ -65,6 +75,15 @@ class FileServer(
         return MessageDigest.isEqual(
             provided.toByteArray(Charsets.UTF_8),
             accessToken.toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    /** Constant-time comparison against the session-only cookie identifier (see [sessionToken]). */
+    private fun isValidSessionToken(provided: String?): Boolean {
+        if (provided == null) return false
+        return MessageDigest.isEqual(
+            provided.toByteArray(Charsets.UTF_8),
+            sessionToken.toByteArray(Charsets.UTF_8)
         )
     }
 
@@ -123,10 +142,9 @@ class FileServer(
 
     /** Returns true only if [id] refers to an image inside the training-data collection. */
     private fun isWithinTrainingData(id: Long): Boolean {
-        val useRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-        val pathColumn = if (useRelativePath) MediaStore.Images.Media.RELATIVE_PATH else MediaStore.Images.Media.DATA
+        val (pathColumn, pattern) = pathColumnAndPattern()
         val selection = "${MediaStore.Images.Media._ID} = ? AND $pathColumn LIKE ?"
-        val selectionArgs = arrayOf(id.toString(), trainingDataLikePattern(useRelativePath))
+        val selectionArgs = arrayOf(id.toString(), pattern)
 
         return try {
             context.contentResolver.query(
@@ -141,32 +159,35 @@ class FileServer(
         }
     }
 
-    private fun trainingDataLikePattern(useRelativePath: Boolean): String =
-        if (useRelativePath) {
+    /**
+     * Returns the MediaStore column to match against the training-data folder, together with
+     * the exact `LIKE` pattern anchored to the `Pictures/WatchReaderTrainingData/` prefix
+     * (rather than a bare substring, so we don't accidentally pick up unrelated media whose
+     * path happens to contain the same marker text). Shared by [isWithinTrainingData] and
+     * [queryEntries] so the two queries can't drift apart over time.
+     */
+    private fun pathColumnAndPattern(): Pair<String, String> {
+        val useRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val pathColumn = if (useRelativePath) MediaStore.Images.Media.RELATIVE_PATH else MediaStore.Images.Media.DATA
+        val pattern = if (useRelativePath) {
             "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
         } else {
             "%/${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/%"
         }
+        return pathColumn to pattern
+    }
 
     /** Queries MediaStore for every image saved under the training-data collection. */
     private fun queryEntries(): List<MediaEntry> {
         val entries = mutableListOf<MediaEntry>()
-        val useRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-        val pathColumn = if (useRelativePath) {
-            MediaStore.Images.Media.RELATIVE_PATH
-        } else {
-            MediaStore.Images.Media.DATA
-        }
+        val (pathColumn, pattern) = pathColumnAndPattern()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             pathColumn
         )
-        // Anchor the match to the exact training-data folder prefix (rather than a bare
-        // substring) so we don't accidentally pick up unrelated media whose path happens to
-        // contain the same marker text.
         val selection = "$pathColumn LIKE ?"
-        val selectionArgs = arrayOf(trainingDataLikePattern(useRelativePath))
+        val selectionArgs = arrayOf(pattern)
 
         try {
             context.contentResolver.query(

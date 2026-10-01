@@ -330,6 +330,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     private fun saveBitmapLegacy(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
         val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            ?: throw IOException("Public Pictures directory is unavailable (external storage not mounted)")
         val dir = File(picturesDir, "$TRAINING_DATA_DIR/$sessionTimestamp")
         dir.mkdirs()
         val file = File(dir, fileName)
