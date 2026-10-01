@@ -22,9 +22,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
-import com.google.mediapipe.tasks.core.BaseOptions
-import com.google.mediapipe.framework.image.BitmapImageBuilder
+import android.content.Intent
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -41,7 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
-    private var objectDetector: ObjectDetector? = null
+    private var watchDetector: WatchDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -54,17 +52,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupDetector() {
-        val baseOptions = BaseOptions.builder()
-            .setModelAssetPath("clock_detector.tflite")
-            .build()
-
-        val options = ObjectDetector.ObjectDetectorOptions.builder()
-            .setBaseOptions(baseOptions)
-            .setScoreThreshold(0.3f) // Lower for older cameras like the Zebra
-            .setMaxResults(1)
-            .build()
-
-        objectDetector = ObjectDetector.createFromOptions(this, options)
+        watchDetector = WatchDetector(this, maxResults = 1)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,11 +63,16 @@ class MainActivity : AppCompatActivity() {
         overlayView = findViewById(R.id.overlayView)
         overlayToggle = findViewById(R.id.overlayToggle)
         val readButton = findViewById<Button>(R.id.readButton)
+        val trainingModeButton = findViewById<Button>(R.id.trainingModeButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         readButton.setOnClickListener {
             captureImage()
+        }
+
+        trainingModeButton.setOnClickListener {
+            startActivity(Intent(this, TrainingCaptureActivity::class.java))
         }
         
         overlayToggle.setOnCheckedChangeListener { _, isChecked ->
@@ -178,18 +171,16 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun readTimeLocally(bitmap: Bitmap) {
-        val detector = objectDetector
+        val detector = watchDetector
         if (detector == null) {
             resultText.text = "Object detector not initialized"
             return
         }
         
-        val mpImage = BitmapImageBuilder(bitmap).build()
-        val results = detector.detect(mpImage)
+        val detections = detector.detectWatches(bitmap)
 
-        if (results.detections().isNotEmpty()) {
-            val detection = results.detections()[0]
-            val box = detection.boundingBox()
+        if (detections.isNotEmpty()) {
+            val box = detections[0]
             
             // Scale coordinates from captured image to preview dimensions
             val scaleX = previewView.width.toFloat() / bitmap.width.toFloat()
@@ -261,5 +252,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        watchDetector?.close()
     }
 }
