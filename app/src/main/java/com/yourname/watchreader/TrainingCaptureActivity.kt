@@ -59,7 +59,6 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val TAG = "TrainingCapture"
         private const val DEFAULT_INTERVAL_SECONDS = 5L
         private const val MIN_INTERVAL_SECONDS = 1L
-        private const val MAX_DETECTIONS_PER_CAPTURE = 10
 
         /** Public sub-folder of Pictures/ where training captures are saved. */
         private const val TRAINING_DATA_DIR = "WatchReaderTrainingData"
@@ -128,7 +127,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         try {
-            watchDetector = WatchDetector(this, maxResults = MAX_DETECTIONS_PER_CAPTURE)
+            watchDetector = WatchDetector(this, maxResults = WatchDetector.MAX_DETECTIONS_PER_CAPTURE)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize detector", e)
             statusText.text = getString(R.string.error_template, e.message)
@@ -138,7 +137,6 @@ class TrainingCaptureActivity : AppCompatActivity() {
         stopButton.setOnClickListener { stopCaptureLoop() }
         serverToggleButton.setOnClickListener { toggleFileServer() }
 
-        requestLegacyStoragePermissionIfNeeded()
         startCamera()
     }
 

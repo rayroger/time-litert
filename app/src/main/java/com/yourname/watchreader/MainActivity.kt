@@ -31,7 +31,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val MAX_DETECTIONS_PER_CAPTURE = 10
     }
 
     private lateinit var resultText: TextView
@@ -53,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupDetector() {
-        watchDetector = WatchDetector(this, maxResults = MAX_DETECTIONS_PER_CAPTURE)
+        watchDetector = WatchDetector(this, maxResults = WatchDetector.MAX_DETECTIONS_PER_CAPTURE)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

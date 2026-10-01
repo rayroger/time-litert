@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.text.Html
 import fi.iki.elonen.NanoHTTPD
+import java.security.MessageDigest
 import java.util.UUID
 
 /**
@@ -31,7 +32,7 @@ class FileServer(
     private data class MediaEntry(val id: Long, val displayName: String)
 
     override fun serve(session: IHTTPSession): Response {
-        if (session.parms["token"] != accessToken) {
+        if (!isValidToken(session.parms["token"])) {
             return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden: missing or invalid token")
         }
 
@@ -41,6 +42,15 @@ class FileServer(
             uri.startsWith("/file/") -> serveFile(uri.removePrefix("/file/"))
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
         }
+    }
+
+    /** Constant-time token comparison to avoid leaking the token via response-timing side channels. */
+    private fun isValidToken(provided: String?): Boolean {
+        if (provided == null) return false
+        return MessageDigest.isEqual(
+            provided.toByteArray(Charsets.UTF_8),
+            accessToken.toByteArray(Charsets.UTF_8)
+        )
     }
 
     private fun serveIndex(): Response {
