@@ -83,10 +83,19 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private var captureCount = 0
     private var watchCount = 0
 
+    /** Set when the user tapped Start but we first needed to request storage permission. */
+    private var pendingStartAfterPermission = false
+
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!granted) {
+        if (granted) {
+            if (pendingStartAfterPermission) {
+                pendingStartAfterPermission = false
+                startCaptureLoop()
+            }
+        } else {
+            pendingStartAfterPermission = false
             Toast.makeText(this, R.string.storage_permission_denied, Toast.LENGTH_LONG).show()
         }
     }
@@ -170,7 +179,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
 
         if (!requestLegacyStoragePermissionIfNeeded()) {
-            Toast.makeText(this, R.string.storage_permission_denied, Toast.LENGTH_LONG).show()
+            // The system permission dialog is now showing; resume automatically in the
+            // storagePermissionLauncher callback once the user responds.
+            pendingStartAfterPermission = true
             return
         }
 
@@ -357,7 +368,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
             server.start()
             fileServer = server
             val ip = getLocalIpAddress() ?: getString(R.string.server_ip_unknown)
-            serverStatusText.text = getString(R.string.server_status_running, ip, FileServer.DEFAULT_PORT)
+            val url = "http://$ip:${FileServer.DEFAULT_PORT}/?token=${server.accessToken}"
+            serverStatusText.text = getString(R.string.server_status_running, url)
             serverToggleButton.text = getString(R.string.action_stop_server)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start file server", e)

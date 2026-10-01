@@ -22,7 +22,7 @@
     <string name="storage_permission_denied">Storage permission is required to save training captures.</string>
     <string name="action_start_server">Start Upload Server</string>
     <string name="action_stop_server">Stop Upload Server</string>
-    <string name="server_status_running">Server running at http://%1$s:%2$d — open this address from a PC on the same Wi-Fi network to browse and download captures.</string>
+    <string name="server_status_running">Server running at %1$s — open this address from a PC on the same Wi-Fi network to browse and download captures. Keep the token in the link private.</string>
     <string name="server_status_stopped">Upload server is stopped.</string>
     <string name="server_ip_unknown">unknown IP</string>
 </resources>
