@@ -117,5 +117,8 @@ class WatchDetector(
             val union = a.width() * a.height() + b.width() * b.height() - inter
             return if (union <= 0f) 0f else inter / union
         }
+
+        /** Shared default cap on simultaneous detections for both capture activities. */
+        const val MAX_DETECTIONS_PER_CAPTURE = 10
     }
 }

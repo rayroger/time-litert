@@ -6,15 +6,24 @@
     <string name="time_template">Time: %1$s</string>
     <string name="error_template">Error: %1$s</string>
     <string name="show_overlay">Show Detection Overlay</string>
+    <string name="status_no_watch">No watch found. Adjust lighting.</string>
+    <string name="watches_found_template">%1$d watch(es) found:</string>
+    <string name="watch_time_placeholder">Watch %1$d: detected! Time recognition requires a specialized clock hand detection model.</string>
+    <string name="watch_region_too_small">Watch %1$d: region too small to analyze.</string>
     <string name="action_training_mode">Training Data Capture Mode</string>
     <string name="training_capture_title">Training Data Capture</string>
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
     <string name="interval_label">Interval (seconds)</string>
-    <string name="training_status_idle">Idle. Set an interval and tap Start.</string>
+    <string name="training_status_idle">Idle. Captures save to Pictures/WatchReaderTrainingData. Set an interval and tap Start.</string>
     <string name="training_status_running">Running… capture %1$d, %2$d watch(es) found so far</string>
-    <string name="training_status_stopped">Stopped. %1$d captures, %2$d watch(es) saved.</string>
+    <string name="training_status_stopped">Stopped. %1$d captures, %2$d watch(es) saved to Pictures/WatchReaderTrainingData.</string>
     <string name="invalid_interval">Please enter a valid interval of at least 1 second.</string>
     <string name="training_save_location">Saving to: %1$s</string>
-    <string name="storage_permission_required">Storage permission is required to save training data on this Android version.</string>
+    <string name="storage_permission_denied">Storage permission is required to save training captures.</string>
+    <string name="action_start_server">Start Upload Server</string>
+    <string name="action_stop_server">Stop Upload Server</string>
+    <string name="server_status_running">Server running at %1$s — open this address from a PC on the same Wi-Fi network to browse and download captures. Keep the token in the link private.</string>
+    <string name="server_status_stopped">Upload server is stopped.</string>
+    <string name="server_ip_unknown">unknown IP</string>
 </resources>

@@ -20,19 +20,23 @@ class OverlayView @JvmOverloads constructor(
         strokeWidth = 8f
     }
 
-    private var detectionBox: RectF? = null
+    private var detectionBoxes: List<RectF> = emptyList()
     var isOverlayEnabled: Boolean = true
 
-    fun setDetectionBox(box: RectF?) {
-        detectionBox = box
+    /**
+     * Updates the set of bounding boxes to draw. Pass an empty list to clear the overlay.
+     * Supports any number of simultaneously detected watches.
+     */
+    fun setDetectionBoxes(boxes: List<RectF>) {
+        detectionBoxes = boxes
         invalidate() // Trigger a redraw
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (isOverlayEnabled) {
-            detectionBox?.let { 
-                canvas.drawRect(it, paint)
+            detectionBoxes.forEach { box ->
+                canvas.drawRect(box, paint)
             }
         }
     }
