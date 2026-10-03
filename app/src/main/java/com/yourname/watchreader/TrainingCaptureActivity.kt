@@ -1,5 +1,8 @@
 package com.yourname.watchreader
 
+import android.Manifest
+import android.content.ContentValues
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -7,12 +10,17 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.media.MediaScannerConnection
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -29,6 +37,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,7 +59,13 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val TAG = "TrainingCapture"
         private const val DEFAULT_INTERVAL_SECONDS = 5L
         private const val MIN_INTERVAL_SECONDS = 1L
-        private const val MAX_DETECTIONS_PER_CAPTURE = 10
+
+        /**
+         * Public sub-folder of Pictures/ where training captures are saved. Shared with
+         * [FileServer], which scopes its listing/serving to this same folder, so both
+         * classes reference [FileServer.TRAINING_DATA_DIR] rather than duplicating the value.
+         */
+        private val TRAINING_DATA_DIR = FileServer.TRAINING_DATA_DIR
     }
 
     private lateinit var previewView: PreviewView
@@ -56,15 +73,35 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var statusText: TextView
+    private lateinit var serverToggleButton: Button
+    private lateinit var serverStatusText: TextView
     private lateinit var cameraExecutor: ExecutorService
 
     private var imageCapture: ImageCapture? = null
     private var watchDetector: WatchDetector? = null
     private var captureLoopJob: Job? = null
-    private var sessionDir: File? = null
+    private var sessionTimestamp: String? = null
+    private var fileServer: FileServer? = null
 
     private var captureCount = 0
     private var watchCount = 0
+
+    /** Set when the user tapped Start but we first needed to request storage permission. */
+    private var pendingStartAfterPermission = false
+
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            if (pendingStartAfterPermission) {
+                pendingStartAfterPermission = false
+                startCaptureLoop()
+            }
+        } else {
+            pendingStartAfterPermission = false
+            Toast.makeText(this, R.string.storage_permission_denied, Toast.LENGTH_LONG).show()
+        }
+    }
 
     private val boxPaint = Paint().apply {
         color = Color.GREEN
@@ -88,11 +125,13 @@ class TrainingCaptureActivity : AppCompatActivity() {
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
         statusText = findViewById(R.id.trainingStatusText)
+        serverToggleButton = findViewById(R.id.serverToggleButton)
+        serverStatusText = findViewById(R.id.serverStatusText)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         try {
-            watchDetector = WatchDetector(this, maxResults = MAX_DETECTIONS_PER_CAPTURE)
+            watchDetector = WatchDetector(this, maxResults = WatchDetector.MAX_DETECTIONS_PER_CAPTURE)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize detector", e)
             statusText.text = getString(R.string.error_template, e.message)
@@ -100,6 +139,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
         startButton.setOnClickListener { startCaptureLoop() }
         stopButton.setOnClickListener { stopCaptureLoop() }
+        serverToggleButton.setOnClickListener { toggleFileServer() }
 
         startCamera()
     }
@@ -140,7 +180,14 @@ class TrainingCaptureActivity : AppCompatActivity() {
             return
         }
 
-        sessionDir = createSessionDir()
+        if (!requestLegacyStoragePermissionIfNeeded()) {
+            // The system permission dialog is now showing; resume automatically in the
+            // storagePermissionLauncher callback once the user responds.
+            pendingStartAfterPermission = true
+            return
+        }
+
+        sessionTimestamp = createSessionTimestamp()
         captureCount = 0
         watchCount = 0
 
@@ -206,7 +253,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         captureCount += 1
         watchCount += detections.size
 
-        val dir = sessionDir ?: createSessionDir().also { sessionDir = it }
+        val timestamp = sessionTimestamp ?: createSessionTimestamp().also { sessionTimestamp = it }
 
         // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
         val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
@@ -216,11 +263,11 @@ class TrainingCaptureActivity : AppCompatActivity() {
             canvas.drawText("Watch ${index + 1}", box.left, (box.top - 12f).coerceAtLeast(24f), labelPaint)
         }
 
-        saveBitmap(annotated, File(dir, "capture_${captureCount}_annotated.jpg"))
+        saveBitmap(annotated, timestamp, "capture_${captureCount}_annotated.jpg")
 
         detections.forEachIndexed { index, box ->
             val crop = cropWatch(bitmap, box) ?: return@forEachIndexed
-            saveBitmap(crop, File(dir, "capture_${captureCount}_watch_${index + 1}.jpg"))
+            saveBitmap(crop, timestamp, "capture_${captureCount}_watch_${index + 1}.jpg")
         }
 
         statusText.text = getString(R.string.training_status_running, captureCount, watchCount)
@@ -242,21 +289,116 @@ class TrainingCaptureActivity : AppCompatActivity() {
         return Bitmap.createBitmap(bitmap, left, top, width, height)
     }
 
-    private fun saveBitmap(bitmap: Bitmap, file: File) {
+    /**
+     * Saves [bitmap] as [fileName] inside the publicly-visible
+     * `Pictures/WatchReaderTrainingData/<sessionTimestamp>` collection, so captures survive
+     * app uninstall and are reachable from a file manager/gallery app without ADB.
+     *
+     * On Android 10+ this goes through [MediaStore]; on older versions it falls back to a
+     * direct file write under the legacy public Pictures directory (requires
+     * `WRITE_EXTERNAL_STORAGE`, requested via [requestLegacyStoragePermissionIfNeeded]).
+     */
+    private fun saveBitmap(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
         try {
-            FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveBitmapToMediaStore(bitmap, sessionTimestamp, fileName)
+            } else {
+                saveBitmapLegacy(bitmap, sessionTimestamp, fileName)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save ${file.name}", e)
+            Log.e(TAG, "Failed to save $fileName", e)
         }
     }
 
-    private fun createSessionDir(): File {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val dir = File(getExternalFilesDir(null), "training_data/$timestamp")
+    private fun saveBitmapToMediaStore(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
+        val relativePath = "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$sessionTimestamp"
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+
+        val resolver = contentResolver
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Failed to create MediaStore entry for $fileName")
+
+        resolver.openOutputStream(uri)?.use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        } ?: throw IOException("Failed to open output stream for $fileName")
+
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+    }
+
+    private fun saveBitmapLegacy(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
+        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            ?: throw IOException("Public Pictures directory is unavailable (external storage not mounted)")
+        val dir = File(picturesDir, "$TRAINING_DATA_DIR/$sessionTimestamp")
         dir.mkdirs()
-        return dir
+        val file = File(dir, fileName)
+        FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        }
+        // Make the new file immediately visible to gallery apps/file managers.
+        MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null)
+    }
+
+    private fun createSessionTimestamp(): String =
+        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+
+    /** Returns true if storage writes are already permitted, requesting the permission otherwise. */
+    private fun requestLegacyStoragePermissionIfNeeded(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return true
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        return granted
+    }
+
+    private fun toggleFileServer() {
+        if (fileServer == null) startFileServer() else stopFileServer()
+    }
+
+    private fun startFileServer() {
+        try {
+            val server = FileServer(applicationContext)
+            server.start()
+            fileServer = server
+            val ip = getLocalIpAddress() ?: getString(R.string.server_ip_unknown)
+            val url = "http://$ip:${FileServer.DEFAULT_PORT}/?token=${server.accessToken}"
+            serverStatusText.text = getString(R.string.server_status_running, url)
+            serverToggleButton.text = getString(R.string.action_stop_server)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start file server", e)
+            serverStatusText.text = getString(R.string.error_template, e.message)
+        }
+    }
+
+    private fun stopFileServer() {
+        fileServer?.stop()
+        fileServer = null
+        serverStatusText.text = getString(R.string.server_status_stopped)
+        serverToggleButton.text = getString(R.string.action_start_server)
+    }
+
+    /** Returns the device's first non-loopback IPv4 address, or null if none is found. */
+    private fun getLocalIpAddress(): String? {
+        return try {
+            NetworkInterface.getNetworkInterfaces().asSequence()
+                .flatMap { it.inetAddresses.asSequence() }
+                .filterIsInstance<Inet4Address>()
+                .firstOrNull { !it.isLoopbackAddress }
+                ?.hostAddress
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to determine local IP address", e)
+            null
+        }
     }
 
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
@@ -280,6 +422,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         captureLoopJob?.cancel()
+        fileServer?.stop()
         cameraExecutor.shutdown()
         watchDetector?.close()
     }

@@ -49,5 +49,8 @@ class WatchDetector(
 
     companion object {
         private const val MODEL_ASSET_PATH = "clock_detector.tflite"
+
+        /** Shared default cap on simultaneous detections for both capture activities. */
+        const val MAX_DETECTIONS_PER_CAPTURE = 10
     }
 }

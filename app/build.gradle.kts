@@ -57,6 +57,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
+    // Local HTTP server used to let a PC browse/download training captures over Wi-Fi.
+    implementation(libs.nanohttpd)
     // 2. ADD LiteRT and MediaPipe
     //implementation("com.google.ai.edge.litert:litert:1.0.1")
     implementation("com.google.mediapipe:tasks-vision:0.10.14") {    
