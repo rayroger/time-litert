@@ -39,13 +39,12 @@ jobs:
         VERSION_CODE=${{ github.run_number }}
         VERSION_NAME=1.0.${{ github.run_number }}
         if [[ "${{ github.event.inputs.buildType }}" == "release" ]]; then
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           echo "$KEYSTORE_BASE64" | base64 -d > /tmp/keystore.jks
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=/tmp/keystore.jks \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
             -PversionCode=$VERSION_CODE \
             -PversionName=$VERSION_NAME;
         else
@@ -53,11 +52,20 @@ jobs:
         fi
       env:
         GRADLE_BUILD_TYPE: ${{ github.event.inputs.buildType }}
+        KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-    - name: Rename APK for Release Build
-      if: ${{ github.event.inputs.buildType == 'release' }}
+    - name: Rename APK to include version
       run: |
-        mv app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/app-release-signed.apk
+        VERSION_NAME=1.0.${{ github.run_number }}
+        BUILD_TYPE=${{ github.event.inputs.buildType }}
+        BUILD_TYPE=${BUILD_TYPE:-debug}
+        cd app/build/outputs/apk/$BUILD_TYPE
+        for f in *.apk; do
+          mv "$f" "${f%.apk}-v$VERSION_NAME.apk"
+        done
 
     - name: Upload APK as build artifact
       uses: actions/upload-artifact@v4
