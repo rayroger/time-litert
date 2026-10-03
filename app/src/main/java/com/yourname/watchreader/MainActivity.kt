@@ -3,8 +3,6 @@ package com.yourname.watchreader
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
@@ -23,7 +21,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import android.content.Intent
-import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -152,24 +149,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        // ImageCapture produces JPEG format, so we need to decode from the JPEG buffer
-        val buffer: ByteBuffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        
-        // Rotate bitmap if needed
-        val rotationDegrees = image.imageInfo.rotationDegrees
-        if (rotationDegrees != 0) {
-            val matrix = Matrix()
-            matrix.postRotate(rotationDegrees.toFloat())
-            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        }
-        
-        return bitmap
-    }
-    
     private fun readTimeLocally(bitmap: Bitmap) {
         val detector = watchDetector
         if (detector == null) {

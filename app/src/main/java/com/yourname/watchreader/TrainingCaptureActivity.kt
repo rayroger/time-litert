@@ -1,18 +1,23 @@
 package com.yourname.watchreader
 
+import android.Manifest
+import android.content.ContentValues
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -20,16 +25,19 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,7 +69,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private var watchDetector: WatchDetector? = null
     private var captureLoopJob: Job? = null
-    private var sessionDir: File? = null
+    private var sessionFolder: String? = null
 
     private var captureCount = 0
     private var watchCount = 0
@@ -76,6 +84,16 @@ class TrainingCaptureActivity : AppCompatActivity() {
         color = Color.GREEN
         textSize = 48f
         style = Paint.Style.FILL
+    }
+
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startCaptureLoop()
+        } else {
+            Toast.makeText(this, R.string.storage_permission_required, Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -116,7 +134,14 @@ class TrainingCaptureActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder().build()
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                        .build()
+                )
+                .build()
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -140,7 +165,15 @@ class TrainingCaptureActivity : AppCompatActivity() {
             return
         }
 
-        sessionDir = createSessionDir()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
+
+        sessionFolder = createSessionDir()
         captureCount = 0
         watchCount = 0
 
@@ -199,31 +232,55 @@ class TrainingCaptureActivity : AppCompatActivity() {
             )
         }
 
-    private fun processCapturedBitmap(bitmap: Bitmap) {
+    private suspend fun processCapturedBitmap(bitmap: Bitmap) {
         val detector = watchDetector
-        val detections: List<RectF> = detector?.detectWatches(bitmap) ?: emptyList()
+        val folder = sessionFolder ?: createSessionDir().also { sessionFolder = it }
+        val index = captureCount + 1
 
-        captureCount += 1
+        val detections: List<WatchDetection> = withContext(Dispatchers.IO) {
+            try {
+                val found = detector?.detect(bitmap) ?: emptyList()
+                found.forEachIndexed { i, d ->
+                    Log.d(TAG, "capture $index detection ${i + 1}: ${d.category} score=${d.score} box=${d.box}")
+                }
+
+                // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
+                val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                try {
+                    val canvas = Canvas(annotated)
+                    found.forEachIndexed { i, d ->
+                        canvas.drawRect(d.box, boxPaint)
+                        canvas.drawText(
+                            "Watch ${i + 1} (%.2f)".format(Locale.US, d.score),
+                            d.box.left,
+                            (d.box.top - 12f).coerceAtLeast(24f),
+                            labelPaint
+                        )
+                    }
+                    saveBitmap(annotated, folder, "capture_${index}_annotated.jpg")
+                } finally {
+                    annotated.recycle()
+                }
+
+                found.forEachIndexed { i, d ->
+                    val crop = cropWatch(bitmap, d.box) ?: return@forEachIndexed
+                    try {
+                        saveBitmap(crop, folder, "capture_${index}_watch_${i + 1}.jpg")
+                    } finally {
+                        crop.recycle()
+                    }
+                }
+                found
+            } finally {
+                bitmap.recycle()
+            }
+        }
+
+        captureCount = index
         watchCount += detections.size
 
-        val dir = sessionDir ?: createSessionDir().also { sessionDir = it }
-
-        // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
-        val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(annotated)
-        detections.forEachIndexed { index, box ->
-            canvas.drawRect(box, boxPaint)
-            canvas.drawText("Watch ${index + 1}", box.left, (box.top - 12f).coerceAtLeast(24f), labelPaint)
-        }
-
-        saveBitmap(annotated, File(dir, "capture_${captureCount}_annotated.jpg"))
-
-        detections.forEachIndexed { index, box ->
-            val crop = cropWatch(bitmap, box) ?: return@forEachIndexed
-            saveBitmap(crop, File(dir, "capture_${captureCount}_watch_${index + 1}.jpg"))
-        }
-
-        statusText.text = getString(R.string.training_status_running, captureCount, watchCount)
+        statusText.text = getString(R.string.training_status_running, captureCount, watchCount) +
+            "\n" + getString(R.string.training_save_location, folder)
     }
 
     private fun cropWatch(bitmap: Bitmap, box: RectF): Bitmap? {
@@ -242,39 +299,38 @@ class TrainingCaptureActivity : AppCompatActivity() {
         return Bitmap.createBitmap(bitmap, left, top, width, height)
     }
 
-    private fun saveBitmap(bitmap: Bitmap, file: File) {
+    private fun saveBitmap(bitmap: Bitmap, folder: String, fileName: String) {
         try {
-            FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, folder)
+                }
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("MediaStore insert failed")
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                }
+            } else {
+                // folder is "Pictures/WatchTraining/<timestamp>"; resolve under the public Pictures dir
+                val dir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    folder.removePrefix("Pictures/")
+                )
+                dir.mkdirs()
+                FileOutputStream(File(dir, fileName)).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save ${file.name}", e)
+            Log.e(TAG, "Failed to save $fileName", e)
         }
     }
 
-    private fun createSessionDir(): File {
+    private fun createSessionDir(): String {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val dir = File(getExternalFilesDir(null), "training_data/$timestamp")
-        dir.mkdirs()
-        return dir
-    }
-
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        // ImageCapture produces JPEG format, so we need to decode from the JPEG buffer
-        val buffer: ByteBuffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-
-        // Rotate bitmap if needed
-        val rotationDegrees = image.imageInfo.rotationDegrees
-        if (rotationDegrees != 0) {
-            val matrix = Matrix()
-            matrix.postRotate(rotationDegrees.toFloat())
-            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        }
-
-        return bitmap
+        return "Pictures/WatchTraining/$timestamp"
     }
 
     override fun onDestroy() {
