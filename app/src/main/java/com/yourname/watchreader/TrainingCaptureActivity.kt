@@ -2,6 +2,7 @@ package com.yourname.watchreader
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -31,12 +32,15 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -44,6 +48,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.TimeZone
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -76,6 +81,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var serverToggleButton: Button
     private lateinit var serverStatusText: TextView
+    private lateinit var uploadSettingsButton: Button
+    private lateinit var uploadStatusText: TextView
     private lateinit var cameraExecutor: ExecutorService
 
     private var imageCapture: ImageCapture? = null
@@ -128,6 +135,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
         statusText = findViewById(R.id.trainingStatusText)
         serverToggleButton = findViewById(R.id.serverToggleButton)
         serverStatusText = findViewById(R.id.serverStatusText)
+        uploadSettingsButton = findViewById(R.id.uploadSettingsButton)
+        uploadStatusText = findViewById(R.id.uploadStatusText)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -141,6 +150,10 @@ class TrainingCaptureActivity : AppCompatActivity() {
         startButton.setOnClickListener { startCaptureLoop() }
         stopButton.setOnClickListener { stopCaptureLoop() }
         serverToggleButton.setOnClickListener { toggleFileServer() }
+        uploadSettingsButton.setOnClickListener {
+            startActivity(Intent(this, UploadSettingsActivity::class.java))
+        }
+        observeUploads()
 
         startCamera()
     }
@@ -284,10 +297,35 @@ class TrainingCaptureActivity : AppCompatActivity() {
                     annotated.recycle()
                 }
 
+                val captureMillis = System.currentTimeMillis()
                 found.forEachIndexed { i, d ->
-                    val crop = cropWatch(bitmap, d.box) ?: return@forEachIndexed
+                    val (crop, cropRect) = cropWatch(bitmap, d.box) ?: return@forEachIndexed
                     try {
-                        saveBitmap(crop, timestamp, "capture_${index}_watch_${i + 1}.jpg")
+                        val imageName = "capture_${index}_watch_${i + 1}.jpg"
+                        saveBitmap(crop, timestamp, imageName)
+                        saveAnnotation(
+                            WatchAnnotation(
+                                imageFilename = imageName,
+                                imageWidth = crop.width,
+                                imageHeight = crop.height,
+                                captureTimestampMillis = captureMillis,
+                                captureTimestampIso = formatIso(captureMillis),
+                                session = timestamp,
+                                captureIndex = index,
+                                dialIndex = i + 1,
+                                sourceImageFilename = "capture_${index}_annotated.jpg",
+                                sourceImageWidth = bitmap.width,
+                                sourceImageHeight = bitmap.height,
+                                dialBoxSource = BoxPx(cropRect.left.toFloat(), cropRect.top.toFloat(), cropRect.right.toFloat(), cropRect.bottom.toFloat()),
+                                dialBoxCrop = BoxPx(0f, 0f, crop.width.toFloat(), crop.height.toFloat()),
+                                detectionScore = d.score,
+                                detectionCategory = d.category,
+                                modelName = WatchDetector.MODEL_NAME,
+                                modelVersion = appVersionName()
+                            ),
+                            timestamp,
+                            "capture_${index}_watch_${i + 1}.json"
+                        )
                     } finally {
                         crop.recycle()
                     }
@@ -308,7 +346,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
             )
     }
 
-    private fun cropWatch(bitmap: Bitmap, box: RectF): Bitmap? {
+    private fun cropWatch(bitmap: Bitmap, box: RectF): Pair<Bitmap, android.graphics.Rect>? {
         val left = box.left.toInt().coerceIn(0, bitmap.width)
         val top = box.top.toInt().coerceIn(0, bitmap.height)
         val right = box.right.toInt().coerceIn(0, bitmap.width)
@@ -321,8 +359,20 @@ class TrainingCaptureActivity : AppCompatActivity() {
             return null
         }
 
-        return Bitmap.createBitmap(bitmap, left, top, width, height)
+        return Bitmap.createBitmap(bitmap, left, top, width, height) to
+            android.graphics.Rect(left, top, right, bottom)
     }
+
+    private fun appVersionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+    } catch (e: Exception) {
+        "unknown"
+    }
+
+    private fun formatIso(millis: Long): String =
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
+            .apply { timeZone = TimeZone.getDefault() }
+            .format(Date(millis))
 
     /**
      * Saves [bitmap] as [fileName] inside the publicly-visible
@@ -335,49 +385,110 @@ class TrainingCaptureActivity : AppCompatActivity() {
      */
     private fun saveBitmap(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
         try {
+            val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                saveBitmapToMediaStore(bitmap, sessionTimestamp, fileName)
+                saveToMediaStore(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, Environment.DIRECTORY_PICTURES,
+                    bytes, sessionTimestamp, fileName, "image/jpeg"
+                )
             } else {
-                saveBitmapLegacy(bitmap, sessionTimestamp, fileName)
+                saveLegacy(bytes, sessionTimestamp, fileName, "image/jpeg")
             }
+            enqueueUpload(sessionTimestamp, fileName, bytes)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save $fileName", e)
         }
     }
 
-    private fun saveBitmapToMediaStore(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
-        val relativePath = "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$sessionTimestamp"
+    /**
+     * Writes [annotation] as [fileName] (`<image base name>.json`). MediaStore only accepts
+     * non-media files under `Documents/` or `Download/` on Android 10+, so there the JSON is
+     * stored in `Documents/WatchReaderTrainingData/<session>/`; on older versions it is written
+     * right next to the image in `Pictures/WatchReaderTrainingData/<session>/`.
+     */
+    private fun saveAnnotation(annotation: WatchAnnotation, sessionTimestamp: String, fileName: String) {
+        try {
+            val bytes = annotation.toJson().toString(2).toByteArray(Charsets.UTF_8)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveToMediaStore(
+                    MediaStore.Files.getContentUri("external"), Environment.DIRECTORY_DOCUMENTS,
+                    bytes, sessionTimestamp, fileName, "application/json"
+                )
+            } else {
+                saveLegacy(bytes, sessionTimestamp, fileName, "application/json")
+            }
+            enqueueUpload(sessionTimestamp, fileName, bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save $fileName", e)
+        }
+    }
+
+    private fun enqueueUpload(sessionTimestamp: String, fileName: String, bytes: ByteArray) {
+        if (!UploadScheduler.isEnabled(this)) return
+        try {
+            UploadScheduler.enqueue(this, sessionTimestamp, fileName, bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to queue upload of $fileName", e)
+        }
+    }
+
+    private fun saveToMediaStore(
+        collection: android.net.Uri, baseDir: String, bytes: ByteArray,
+        sessionTimestamp: String, fileName: String, mimeType: String
+    ) {
+        val relativePath = "$baseDir/$TRAINING_DATA_DIR/$sessionTimestamp"
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
-            put(MediaStore.Images.Media.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
 
         val resolver = contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        val uri = resolver.insert(collection, values)
             ?: throw IOException("Failed to create MediaStore entry for $fileName")
 
         resolver.openOutputStream(uri)?.use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            out.write(bytes)
         } ?: throw IOException("Failed to open output stream for $fileName")
 
         values.clear()
-        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
     }
 
-    private fun saveBitmapLegacy(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
+    private fun saveLegacy(bytes: ByteArray, sessionTimestamp: String, fileName: String, mimeType: String) {
         val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
             ?: throw IOException("Public Pictures directory is unavailable (external storage not mounted)")
         val dir = File(picturesDir, "$TRAINING_DATA_DIR/$sessionTimestamp")
         dir.mkdirs()
         val file = File(dir, fileName)
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-        }
+        FileOutputStream(file).use { out -> out.write(bytes) }
         // Make the new file immediately visible to gallery apps/file managers.
-        MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null)
+        MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf(mimeType), null)
+    }
+
+    /** Shows pending/done/failed counts of queued FTP/SFTP uploads. */
+    private fun observeUploads() {
+        lifecycleScope.launch {
+            WorkManager.getInstance(applicationContext)
+                .getWorkInfosByTagFlow(UploadWorker.WORK_TAG)
+                .collect { infos ->
+                    if (infos.isEmpty() && !UploadScheduler.isEnabled(this@TrainingCaptureActivity)) {
+                        uploadStatusText.text = getString(R.string.upload_status_disabled)
+                        return@collect
+                    }
+                    val done = infos.count { it.state == WorkInfo.State.SUCCEEDED }
+                    val failed = infos.count { it.state == WorkInfo.State.FAILED }
+                    val pending = infos.count { !it.state.isFinished }
+                    val lastError = infos.firstOrNull { it.state == WorkInfo.State.FAILED }
+                        ?.outputData?.getString(UploadWorker.KEY_ERROR)
+                    uploadStatusText.text = getString(
+                        R.string.upload_status, pending, done, failed,
+                        if (lastError != null) " ($lastError)" else ""
+                    )
+                }
+        }
     }
 
     private fun createSessionTimestamp(): String =
@@ -401,22 +512,33 @@ class TrainingCaptureActivity : AppCompatActivity() {
     }
 
     private fun startFileServer() {
+        // Guard against double starts (e.g. rapid taps) which would otherwise hit EADDRINUSE.
+        if (fileServer != null) return
         try {
-            val server = FileServer(applicationContext)
-            server.start()
+            val server = FileServer.startWithFallback(applicationContext)
             fileServer = server
+            val port = server.listeningPort
             val ip = getLocalIpAddress() ?: getString(R.string.server_ip_unknown)
-            val url = "http://$ip:${FileServer.DEFAULT_PORT}/?token=${server.accessToken}"
-            serverStatusText.text = getString(R.string.server_status_running, url)
+            val url = "http://$ip:$port/?token=${server.accessToken}"
+            var text = getString(R.string.server_status_running, url)
+            if (port != FileServer.DEFAULT_PORT) {
+                text += "\n" + getString(R.string.server_port_fallback_note, FileServer.DEFAULT_PORT, port)
+            }
+            serverStatusText.text = text
             serverToggleButton.text = getString(R.string.action_stop_server)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start file server", e)
+            fileServer = null
             serverStatusText.text = getString(R.string.error_template, e.message)
         }
     }
 
     private fun stopFileServer() {
-        fileServer?.stop()
+        try {
+            fileServer?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error while stopping file server", e)
+        }
         fileServer = null
         serverStatusText.text = getString(R.string.server_status_stopped)
         serverToggleButton.text = getString(R.string.action_start_server)
@@ -436,10 +558,17 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Release the listening socket as soon as the screen goes away so it can't linger and
+        // cause EADDRINUSE on the next start.
+        if (fileServer != null) stopFileServer()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         captureLoopJob?.cancel()
-        fileServer?.stop()
+        if (fileServer != null) stopFileServer()
         cameraExecutor.shutdown()
         watchDetector?.close()
     }

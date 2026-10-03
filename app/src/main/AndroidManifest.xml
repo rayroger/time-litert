@@ -8,7 +8,7 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-    <!-- Needed for the local HTTP upload server used to browse/download training captures. -->
+    <!-- Needed for the local HTTP upload server and for FTP/SFTP uploads of training captures. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -22,5 +22,6 @@
             </intent-filter>
         </activity>
         <activity android:name=".TrainingCaptureActivity" android:exported="false" />
+        <activity android:name=".UploadSettingsActivity" android:exported="false" />
     </application>
 </manifest>

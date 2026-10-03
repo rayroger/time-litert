@@ -80,6 +80,20 @@
             android:layout_marginTop="8dp"
             android:text="@string/server_status_stopped" />
 
+        <Button
+            android:id="@+id/uploadSettingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/action_upload_settings" />
+
+        <TextView
+            android:id="@+id/uploadStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/upload_status_disabled" />
+
     </LinearLayout>
 
 </LinearLayout>

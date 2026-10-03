@@ -38,6 +38,57 @@ every link (keeping it out of browser history/Referer headers for subsequent nav
 share the printed URL with people/PCs you trust on your Wi-Fi network. Tap **"Stop Upload
 Server"** when you're done to free the port.
 
+### Annotation metadata (for NN training)
+
+For every saved dial crop `capture_<n>_watch_<m>.jpg` an annotation file with the same base name,
+`capture_<n>_watch_<m>.json`, is written. On Android 10+ MediaStore only accepts non-media files
+under `Documents/`, so the JSON lands in `Documents/WatchReaderTrainingData/<session>/`; on
+Android 9 and below it is written next to the image in `Pictures/WatchReaderTrainingData/<session>/`.
+
+```json
+{
+  "format_version": 1,
+  "image":   {"filename": "capture_1_watch_1.jpg", "width": 412, "height": 398},
+  "capture": {"timestamp_millis": 1700000000000, "timestamp_iso": "2023-11-14T22:13:20.000Z",
+              "session": "20231114_221320", "capture_index": 1, "dial_index": 1},
+  "source_image": {"filename": "capture_1_annotated.jpg", "width": 4000, "height": 3000},
+  "dial_bbox": {"format": "xyxy", "source": [l, t, r, b], "crop": [0, 0, w, h]},
+  "hands": {"hour": null, "minute": null, "second": null,
+            "hour_angle_deg": null, "minute_angle_deg": null, "second_angle_deg": null,
+            "confidence": null},
+  "keypoints": {"coordinate_space": "crop", "dial_center": null,
+                "hour_tip": null, "minute_tip": null, "second_tip": null},
+  "model":  {"name": "clock_detector.tflite", "version": "<app versionName>",
+             "detection_category": "clock", "detection_confidence": 0.87},
+  "device": {"manufacturer": "...", "model": "...", "android_sdk": 34},
+  "label_source": "auto",
+  "verified": false
+}
+```
+
+- `dial_bbox` is `[left, top, right, bottom]` in pixels, in source-photo and crop coordinates.
+- Hand values/angles (degrees clockwise from 12) and keypoints are `null` until a hand model or a
+  human fills them in (the current detector only locates the dial).
+- `label_source` is `auto` for machine labels; set it to `manual` and `verified` to `true` after
+  correcting a file by hand.
+
+### Local server port handling
+
+The upload server prefers port `8080`; if it is busy (`EADDRINUSE`) it tries the next 10 ports and
+finally an OS-assigned port. The screen always shows the actual URL/port. The server is stopped
+when the screen stops/is destroyed, and double starts are ignored.
+
+### FTP / FTPS / SFTP upload
+
+**"Upload Settings (FTP/SFTP)"** lets you enable uploading of every image and its `.json` annotation
+to a remote server: protocol (FTP, FTPS or SFTP), host, port, username, password (or private key
+for SFTP, with the password field as passphrase) and remote directory. Files go to
+`<remote dir>/<session>/`. The password/key are encrypted with an Android Keystore AES-GCM key
+before being stored. Uploads run in the background through WorkManager (network required), retry
+with exponential backoff (up to 5 attempts) and the capture screen shows pending/done/failed counts
+and the last error. Libraries: Apache commons-net (FTP/FTPS) and JSch (SFTP, `com.github.mwiede:jsch`).
+SFTP accepts unknown host keys on first connect.
+
 ## 📱 Requirements
 
 

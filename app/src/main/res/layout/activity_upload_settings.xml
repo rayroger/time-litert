@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <CheckBox
+            android:id="@+id/uploadEnabled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/upload_enabled" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/upload_protocol" />
+
+        <Spinner
+            android:id="@+id/uploadProtocol"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <EditText
+            android:id="@+id/uploadHost"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_host"
+            android:inputType="textUri" />
+
+        <EditText
+            android:id="@+id/uploadPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_port"
+            android:inputType="number" />
+
+        <EditText
+            android:id="@+id/uploadUser"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_user"
+            android:inputType="text" />
+
+        <EditText
+            android:id="@+id/uploadPassword"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_password"
+            android:inputType="textPassword" />
+
+        <EditText
+            android:id="@+id/uploadKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_key"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:minLines="3" />
+
+        <EditText
+            android:id="@+id/uploadDir"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/upload_dir"
+            android:inputType="text" />
+
+        <Button
+            android:id="@+id/uploadSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/upload_save" />
+
+    </LinearLayout>
+</ScrollView>

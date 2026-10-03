@@ -7,6 +7,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.text.Html
 import fi.iki.elonen.NanoHTTPD
+import android.util.Log
+import java.io.IOException
+import java.net.BindException
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -227,6 +230,38 @@ class FileServer(
 
     companion object {
         const val DEFAULT_PORT = 8080
+
+        private const val TAG = "FileServer"
+
+        /** Number of consecutive ports after the preferred one to try before using an ephemeral port. */
+        private const val PORT_FALLBACK_COUNT = 10
+
+        /**
+         * Starts a server on [preferredPort], falling back to the next [PORT_FALLBACK_COUNT]
+         * ports and finally to an OS-assigned ephemeral port (port 0) when the port is busy
+         * (`EADDRINUSE`). Read the actual port from [NanoHTTPD.getListeningPort].
+         *
+         * @throws IOException if no port could be bound at all.
+         */
+        @Throws(IOException::class)
+        fun startWithFallback(context: Context, preferredPort: Int = DEFAULT_PORT): FileServer {
+            val candidates = (preferredPort..preferredPort + PORT_FALLBACK_COUNT).filter { it in 1..65535 } + 0
+            var lastError: IOException? = null
+            for (port in candidates) {
+                val server = FileServer(context.applicationContext, port)
+                try {
+                    server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+                    return server
+                } catch (e: IOException) {
+                    Log.w(TAG, "Could not bind port $port: ${e.message}")
+                    // Release anything the failed attempt may have left open.
+                    try { server.stop() } catch (_: Exception) { }
+                    lastError = e
+                    if (e !is BindException) throw e
+                }
+            }
+            throw lastError ?: IOException("No available port")
+        }
 
         /** Public sub-folder of Pictures/ shared with [TrainingCaptureActivity]'s storage location. */
         const val TRAINING_DATA_DIR = "WatchReaderTrainingData"
