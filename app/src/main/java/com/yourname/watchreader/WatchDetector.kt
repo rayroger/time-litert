@@ -95,6 +95,9 @@ class WatchDetector(
     companion object {
         private const val TAG = "WatchDetector"
         private const val MODEL_ASSET_PATH = "clock_detector.tflite"
+
+        /** Name recorded in annotation metadata for the bundled detection model. */
+        const val MODEL_NAME = MODEL_ASSET_PATH
         private const val WATCH_CATEGORY = "clock"
         private const val MIN_PASS_RESULTS = 10
         private const val TILE_FRACTION = 0.6f

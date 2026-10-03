@@ -26,4 +26,21 @@
     <string name="server_status_running">Server running at %1$s — open this address from a PC on the same Wi-Fi network to browse and download captures. Keep the token in the link private.</string>
     <string name="server_status_stopped">Upload server is stopped.</string>
     <string name="server_ip_unknown">unknown IP</string>
+    <string name="server_port_fallback_note">Preferred port %1$d was busy; using port %2$d instead.</string>
+    <string name="action_upload_settings">Upload Settings (FTP/SFTP)</string>
+    <string name="upload_settings_title">FTP / SFTP Upload</string>
+    <string name="upload_enabled">Upload captures and annotations to a remote server</string>
+    <string name="upload_protocol">Protocol</string>
+    <string name="upload_host">Host</string>
+    <string name="upload_port">Port</string>
+    <string name="upload_user">Username</string>
+    <string name="upload_password">Password (or key passphrase)</string>
+    <string name="upload_key">Private key (optional, SFTP only; PEM text)</string>
+    <string name="upload_dir">Remote directory</string>
+    <string name="upload_save">Save</string>
+    <string name="upload_settings_saved">Upload settings saved.</string>
+    <string name="upload_status_disabled">Remote upload: disabled.</string>
+    <string name="upload_status">Remote upload: %1$d pending, %2$d done, %3$d failed%4$s</string>
+    <string name="upload_invalid_port">Enter a port between 1 and 65535</string>
+    <string name="upload_host_user_required">Host and username are required</string>
 </resources>

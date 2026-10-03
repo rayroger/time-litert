@@ -59,6 +59,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // Local HTTP server used to let a PC browse/download training captures over Wi-Fi.
     implementation(libs.nanohttpd)
+    // Optional FTP/FTPS (commons-net) and SFTP (JSch) upload, run via WorkManager.
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.commons.net)
+    implementation(libs.jsch)
     // 2. ADD LiteRT and MediaPipe
     //implementation("com.google.ai.edge.litert:litert:1.0.1")
     implementation("com.google.mediapipe:tasks-vision:0.10.14") {    
