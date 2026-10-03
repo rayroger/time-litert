@@ -39,8 +39,10 @@ jobs:
         VERSION_CODE=${{ github.run_number }}
         VERSION_NAME=1.0.${{ github.run_number }}
         if [[ "${{ github.event.inputs.buildType }}" == "release" ]]; then
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/keystore.jks
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=/home/runner/work/time-litert/time-litert/app/keystore.jks \
+            -Pandroid.injected.signing.store.file=/tmp/keystore.jks \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} \
