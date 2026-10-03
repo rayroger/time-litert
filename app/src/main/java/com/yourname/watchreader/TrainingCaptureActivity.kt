@@ -4,10 +4,8 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.media.MediaScannerConnection
@@ -27,20 +25,23 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -156,7 +157,14 @@ class TrainingCaptureActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder().build()
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                        .build()
+                )
+                .build()
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -246,31 +254,58 @@ class TrainingCaptureActivity : AppCompatActivity() {
             )
         }
 
-    private fun processCapturedBitmap(bitmap: Bitmap) {
+    private suspend fun processCapturedBitmap(bitmap: Bitmap) {
         val detector = watchDetector
-        val detections: List<RectF> = detector?.detectWatches(bitmap) ?: emptyList()
+        val timestamp = sessionTimestamp ?: createSessionTimestamp().also { sessionTimestamp = it }
+        val index = captureCount + 1
 
-        captureCount += 1
+        val detections: List<WatchDetection> = withContext(Dispatchers.IO) {
+            try {
+                val found = detector?.detect(bitmap) ?: emptyList()
+                found.forEachIndexed { i, d ->
+                    Log.d(TAG, "capture $index detection ${i + 1}: ${d.category} score=${d.score} box=${d.box}")
+                }
+
+                // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
+                val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                try {
+                    val canvas = Canvas(annotated)
+                    found.forEachIndexed { i, d ->
+                        canvas.drawRect(d.box, boxPaint)
+                        canvas.drawText(
+                            "Watch ${i + 1} (%.2f)".format(Locale.US, d.score),
+                            d.box.left,
+                            (d.box.top - 12f).coerceAtLeast(24f),
+                            labelPaint
+                        )
+                    }
+                    saveBitmap(annotated, timestamp, "capture_${index}_annotated.jpg")
+                } finally {
+                    annotated.recycle()
+                }
+
+                found.forEachIndexed { i, d ->
+                    val crop = cropWatch(bitmap, d.box) ?: return@forEachIndexed
+                    try {
+                        saveBitmap(crop, timestamp, "capture_${index}_watch_${i + 1}.jpg")
+                    } finally {
+                        crop.recycle()
+                    }
+                }
+                found
+            } finally {
+                bitmap.recycle()
+            }
+        }
+
+        captureCount = index
         watchCount += detections.size
 
-        val timestamp = sessionTimestamp ?: createSessionTimestamp().also { sessionTimestamp = it }
-
-        // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
-        val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(annotated)
-        detections.forEachIndexed { index, box ->
-            canvas.drawRect(box, boxPaint)
-            canvas.drawText("Watch ${index + 1}", box.left, (box.top - 12f).coerceAtLeast(24f), labelPaint)
-        }
-
-        saveBitmap(annotated, timestamp, "capture_${captureCount}_annotated.jpg")
-
-        detections.forEachIndexed { index, box ->
-            val crop = cropWatch(bitmap, box) ?: return@forEachIndexed
-            saveBitmap(crop, timestamp, "capture_${captureCount}_watch_${index + 1}.jpg")
-        }
-
-        statusText.text = getString(R.string.training_status_running, captureCount, watchCount)
+        statusText.text = getString(R.string.training_status_running, captureCount, watchCount) +
+            "\n" + getString(
+                R.string.training_save_location,
+                "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$timestamp"
+            )
     }
 
     private fun cropWatch(bitmap: Bitmap, box: RectF): Bitmap? {
@@ -399,24 +434,6 @@ class TrainingCaptureActivity : AppCompatActivity() {
             Log.e(TAG, "Failed to determine local IP address", e)
             null
         }
-    }
-
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        // ImageCapture produces JPEG format, so we need to decode from the JPEG buffer
-        val buffer: ByteBuffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-
-        // Rotate bitmap if needed
-        val rotationDegrees = image.imageInfo.rotationDegrees
-        if (rotationDegrees != 0) {
-            val matrix = Matrix()
-            matrix.postRotate(rotationDegrees.toFloat())
-            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        }
-
-        return bitmap
     }
 
     override fun onDestroy() {

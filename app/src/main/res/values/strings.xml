@@ -19,6 +19,7 @@
     <string name="training_status_running">Running… capture %1$d, %2$d watch(es) found so far</string>
     <string name="training_status_stopped">Stopped. %1$d captures, %2$d watch(es) saved to Pictures/WatchReaderTrainingData.</string>
     <string name="invalid_interval">Please enter a valid interval of at least 1 second.</string>
+    <string name="training_save_location">Saving to: %1$s</string>
     <string name="storage_permission_denied">Storage permission is required to save training captures.</string>
     <string name="action_start_server">Start Upload Server</string>
     <string name="action_stop_server">Stop Upload Server</string>
