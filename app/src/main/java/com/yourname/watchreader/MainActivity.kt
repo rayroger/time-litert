@@ -23,6 +23,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -144,20 +145,22 @@ class MainActivity : AppCompatActivity() {
         resultText.text = getString(R.string.status_thinking)
 
         lifecycleScope.launch {
-            cameraControl?.focusAndMeterAtCenter(previewView)
-
             try {
+                cameraControl?.focusAndMeterAtCenter(previewView)
                 imageCapture.takePicture(
                     ContextCompat.getMainExecutor(this@MainActivity),
                     object : ImageCapture.OnImageCapturedCallback() {
                         override fun onCaptureSuccess(image: ImageProxy) {
-                            val bitmap = try {
-                                imageProxyToBitmap(image)
+                            try {
+                                val bitmap = imageProxyToBitmap(image)
+                                readTimeLocally(bitmap)
+                            } catch (exception: Exception) {
+                                Log.e(TAG, "Failed to process captured image", exception)
+                                resultText.text = getString(R.string.error_template, exception.message)
                             } finally {
                                 image.close()
                                 finishCapture()
                             }
-                            readTimeLocally(bitmap)
                         }
 
                         override fun onError(exception: ImageCaptureException) {
@@ -167,6 +170,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 )
+            } catch (exception: CancellationException) {
+                finishCapture()
+                throw exception
             } catch (exception: Exception) {
                 finishCapture()
                 Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
