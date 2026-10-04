@@ -184,6 +184,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
+                cameraControl = null
+                imageCapture = null
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, capture
@@ -574,6 +576,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         captureLoopJob?.cancel()
+        cameraControl = null
+        imageCapture = null
         if (fileServer != null) stopFileServer()
         cameraExecutor.shutdown()
         watchDetector?.close()

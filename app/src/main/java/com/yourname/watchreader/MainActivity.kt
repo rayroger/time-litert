@@ -123,6 +123,8 @@ class MainActivity : AppCompatActivity() {
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
+                cameraControl = null
+                imageCapture = null
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, capture
@@ -268,6 +270,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cameraControl = null
+        imageCapture = null
         cameraExecutor.shutdown()
         watchDetector?.close()
     }
