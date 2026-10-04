@@ -1,12 +1,12 @@
 package com.yourname.watchreader
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
-import android.content.Intent
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -34,12 +34,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var resultText: TextView
+    private lateinit var readButton: Button
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: OverlayView
     private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
     private var cameraControl: CameraControl? = null
+    private var captureInProgress = false
     private var watchDetector: WatchDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -63,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         overlayView = findViewById(R.id.overlayView)
         overlayToggle = findViewById(R.id.overlayToggle)
-        val readButton = findViewById<Button>(R.id.readButton)
+        readButton = findViewById(R.id.readButton)
         val trainingModeButton = findViewById<Button>(R.id.trainingModeButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -134,29 +136,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureImage() {
+        if (captureInProgress) return
         val imageCapture = imageCapture ?: return
 
+        captureInProgress = true
+        readButton.isEnabled = false
         resultText.text = getString(R.string.status_thinking)
 
         lifecycleScope.launch {
             cameraControl?.focusAndMeterAtCenter(previewView)
 
-            imageCapture.takePicture(
-                ContextCompat.getMainExecutor(this@MainActivity),
-                object : ImageCapture.OnImageCapturedCallback() {
-                    override fun onCaptureSuccess(image: ImageProxy) {
-                        val bitmap = imageProxyToBitmap(image)
-                        image.close()
-                        readTimeLocally(bitmap)
-                    }
+            try {
+                imageCapture.takePicture(
+                    ContextCompat.getMainExecutor(this@MainActivity),
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            val bitmap = try {
+                                imageProxyToBitmap(image)
+                            } finally {
+                                image.close()
+                                finishCapture()
+                            }
+                            readTimeLocally(bitmap)
+                        }
 
-                    override fun onError(exception: ImageCaptureException) {
-                        Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
-                        resultText.text = getString(R.string.error_template, exception.message)
+                        override fun onError(exception: ImageCaptureException) {
+                            finishCapture()
+                            Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                            resultText.text = getString(R.string.error_template, exception.message)
+                        }
                     }
-                }
-            )
+                )
+            } catch (exception: Exception) {
+                finishCapture()
+                Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                resultText.text = getString(R.string.error_template, exception.message)
+            }
         }
+    }
+
+    private fun finishCapture() {
+        captureInProgress = false
+        readButton.isEnabled = true
     }
 
     private fun readTimeLocally(bitmap: Bitmap) {
