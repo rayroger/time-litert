@@ -35,7 +35,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -243,17 +242,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private suspend fun captureOnce() {
         val capture = imageCapture ?: return
 
-        try {
-            cameraControl?.let { control ->
-                if (!control.focusAndMeterAtCenter(previewView)) {
-                    Log.w(TAG, "Autofocus did not report success; capturing anyway")
-                }
-            }
-        } catch (exception: CancellationException) {
-            throw exception
-        } catch (exception: Exception) {
-            Log.w(TAG, "Autofocus failed; capturing anyway", exception)
-        }
+        cameraControl?.focusAndMeterAtCenter(previewView)
 
         val bitmap = try {
             takePictureSuspend(capture)

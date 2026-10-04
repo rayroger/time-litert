@@ -23,7 +23,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -140,17 +139,7 @@ class MainActivity : AppCompatActivity() {
         resultText.text = getString(R.string.status_thinking)
 
         lifecycleScope.launch {
-            try {
-                cameraControl?.let { control ->
-                    if (!control.focusAndMeterAtCenter(previewView)) {
-                        Log.w(TAG, "Autofocus did not report success; capturing anyway")
-                    }
-                }
-            } catch (exception: CancellationException) {
-                throw exception
-            } catch (exception: Exception) {
-                Log.w(TAG, "Autofocus failed; capturing anyway", exception)
-            }
+            cameraControl?.focusAndMeterAtCenter(previewView)
 
             imageCapture.takePicture(
                 ContextCompat.getMainExecutor(this@MainActivity),
