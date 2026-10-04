@@ -6,12 +6,14 @@ import android.graphics.Bitmap
 import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
+import android.content.Intent
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -20,7 +22,9 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import android.content.Intent
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -36,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
+    private var cameraControl: CameraControl? = null
     private var watchDetector: WatchDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -111,15 +116,17 @@ class MainActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder().build()
+            val capture = ImageCapture.Builder().build()
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, capture
                 )
+                cameraControl = camera.cameraControl
+                imageCapture = capture
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -132,21 +139,35 @@ class MainActivity : AppCompatActivity() {
 
         resultText.text = getString(R.string.status_thinking)
 
-        imageCapture.takePicture(
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val bitmap = imageProxyToBitmap(image)
-                    image.close()
-                    readTimeLocally(bitmap)
+        lifecycleScope.launch {
+            try {
+                cameraControl?.let { control ->
+                    if (!control.focusAndMeterAtCenter(previewView)) {
+                        Log.w(TAG, "Autofocus did not report success; capturing anyway")
+                    }
                 }
-
-                override fun onError(exception: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
-                    resultText.text = getString(R.string.error_template, exception.message)
-                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                Log.w(TAG, "Autofocus failed; capturing anyway", exception)
             }
-        )
+
+            imageCapture.takePicture(
+                ContextCompat.getMainExecutor(this@MainActivity),
+                object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        val bitmap = imageProxyToBitmap(image)
+                        image.close()
+                        readTimeLocally(bitmap)
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
+                        Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                        resultText.text = getString(R.string.error_template, exception.message)
+                    }
+                }
+            )
+        }
     }
 
     private fun readTimeLocally(bitmap: Bitmap) {

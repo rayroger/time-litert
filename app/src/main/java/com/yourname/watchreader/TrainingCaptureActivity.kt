@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -34,6 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -86,6 +88,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
 
     private var imageCapture: ImageCapture? = null
+    private var cameraControl: CameraControl? = null
     private var watchDetector: WatchDetector? = null
     private var captureLoopJob: Job? = null
     private var sessionTimestamp: String? = null
@@ -170,7 +173,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder()
+            val capture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
@@ -183,9 +186,11 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, capture
                 )
+                cameraControl = camera.cameraControl
+                imageCapture = capture
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -237,6 +242,18 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     private suspend fun captureOnce() {
         val capture = imageCapture ?: return
+
+        try {
+            cameraControl?.let { control ->
+                if (!control.focusAndMeterAtCenter(previewView)) {
+                    Log.w(TAG, "Autofocus did not report success; capturing anyway")
+                }
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            Log.w(TAG, "Autofocus failed; capturing anyway", exception)
+        }
 
         val bitmap = try {
             takePictureSuspend(capture)
