@@ -149,6 +149,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 cameraControl?.focusAndMeterAtCenter(previewView)
+                if (this@MainActivity.imageCapture !== imageCapture) {
+                    finishCapture()
+                    return@launch
+                }
                 imageCapture.takePicture(
                     ContextCompat.getMainExecutor(this@MainActivity),
                     object : ImageCapture.OnImageCapturedCallback() {
@@ -166,9 +170,9 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         override fun onError(exception: ImageCaptureException) {
-                            finishCapture()
                             Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
                             resultText.text = getString(R.string.error_template, exception.message)
+                            finishCapture()
                         }
                     }
                 )
@@ -176,9 +180,9 @@ class MainActivity : AppCompatActivity() {
                 finishCapture()
                 throw exception
             } catch (exception: Exception) {
-                finishCapture()
                 Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
                 resultText.text = getString(R.string.error_template, exception.message)
+                finishCapture()
             }
         }
     }

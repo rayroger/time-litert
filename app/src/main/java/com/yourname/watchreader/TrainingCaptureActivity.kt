@@ -245,6 +245,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         val capture = imageCapture ?: return
 
         cameraControl?.focusAndMeterAtCenter(previewView)
+        cameraControl?.focusAndMeterAtCenter(previewView)
 
         val bitmap = try {
             takePictureSuspend(capture)
