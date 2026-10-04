@@ -1,6 +1,7 @@
 package com.yourname.watchreader
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.RectF
@@ -12,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -20,7 +22,9 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import android.content.Intent
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -31,11 +35,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var resultText: TextView
+    private lateinit var readButton: Button
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: OverlayView
     private lateinit var overlayToggle: SwitchCompat
     private lateinit var cameraExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
+    private var cameraControl: CameraControl? = null
+    private var captureInProgress = false
     private var watchDetector: WatchDetector? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -59,7 +66,7 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         overlayView = findViewById(R.id.overlayView)
         overlayToggle = findViewById(R.id.overlayToggle)
-        val readButton = findViewById<Button>(R.id.readButton)
+        readButton = findViewById(R.id.readButton)
         val trainingModeButton = findViewById<Button>(R.id.trainingModeButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -111,15 +118,19 @@ class MainActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder().build()
+            val capture = ImageCapture.Builder().build()
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
+                cameraControl = null
+                imageCapture = null
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, capture
                 )
+                cameraControl = camera.cameraControl
+                imageCapture = capture
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -128,25 +139,57 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureImage() {
+        if (captureInProgress) return
         val imageCapture = imageCapture ?: return
 
+        captureInProgress = true
+        readButton.isEnabled = false
         resultText.text = getString(R.string.status_thinking)
 
-        imageCapture.takePicture(
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val bitmap = imageProxyToBitmap(image)
-                    image.close()
-                    readTimeLocally(bitmap)
+        lifecycleScope.launch {
+            try {
+                cameraControl?.focusAndMeterAtCenter(previewView)
+                if (this@MainActivity.imageCapture !== imageCapture) {
+                    finishCapture()
+                    return@launch
                 }
+                imageCapture.takePicture(
+                    ContextCompat.getMainExecutor(this@MainActivity),
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            try {
+                                val bitmap = imageProxyToBitmap(image)
+                                readTimeLocally(bitmap)
+                            } catch (exception: Exception) {
+                                Log.e(TAG, "Failed to process captured image", exception)
+                                resultText.text = getString(R.string.error_template, exception.message)
+                            } finally {
+                                image.close()
+                                finishCapture()
+                            }
+                        }
 
-                override fun onError(exception: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
-                    resultText.text = getString(R.string.error_template, exception.message)
-                }
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                            resultText.text = getString(R.string.error_template, exception.message)
+                            finishCapture()
+                        }
+                    }
+                )
+            } catch (exception: CancellationException) {
+                finishCapture()
+                throw exception
+            } catch (exception: Exception) {
+                Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                resultText.text = getString(R.string.error_template, exception.message)
+                finishCapture()
             }
-        )
+        }
+    }
+
+    private fun finishCapture() {
+        captureInProgress = false
+        readButton.isEnabled = true
     }
 
     private fun readTimeLocally(bitmap: Bitmap) {
@@ -231,6 +274,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cameraControl = null
+        imageCapture = null
         cameraExecutor.shutdown()
         watchDetector?.close()
     }

@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -86,6 +87,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
 
     private var imageCapture: ImageCapture? = null
+    private var cameraControl: CameraControl? = null
     private var watchDetector: WatchDetector? = null
     private var captureLoopJob: Job? = null
     private var sessionTimestamp: String? = null
@@ -170,7 +172,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder()
+            val capture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
@@ -182,10 +184,14 @@ class TrainingCaptureActivity : AppCompatActivity() {
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
+                cameraControl = null
+                imageCapture = null
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, capture
                 )
+                cameraControl = camera.cameraControl
+                imageCapture = capture
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
@@ -237,6 +243,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     private suspend fun captureOnce() {
         val capture = imageCapture ?: return
+
+        cameraControl?.focusAndMeterAtCenter(previewView)
+        if (imageCapture !== capture) return
 
         val bitmap = try {
             takePictureSuspend(capture)
@@ -568,6 +577,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         captureLoopJob?.cancel()
+        cameraControl = null
+        imageCapture = null
         if (fileServer != null) stopFileServer()
         cameraExecutor.shutdown()
         watchDetector?.close()
