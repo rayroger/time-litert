@@ -512,7 +512,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private fun saveBitmap(bitmap: Bitmap, sessionTimestamp: String, fileName: String) {
         try {
             val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val local = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 saveToMediaStore(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, Environment.DIRECTORY_PICTURES,
                     bytes, sessionTimestamp, fileName, "image/jpeg"
@@ -520,7 +520,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
             } else {
                 saveLegacy(bytes, sessionTimestamp, fileName, "image/jpeg")
             }
-            enqueueUpload(sessionTimestamp, fileName, bytes)
+            enqueueUpload(sessionTimestamp, fileName, bytes, local)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save $fileName", e)
         }
@@ -535,7 +535,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private fun saveAnnotation(annotation: WatchAnnotation, sessionTimestamp: String, fileName: String) {
         try {
             val bytes = annotation.toJson().toString(2).toByteArray(Charsets.UTF_8)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val local = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 saveToMediaStore(
                     MediaStore.Files.getContentUri("external"), Environment.DIRECTORY_DOCUMENTS,
                     bytes, sessionTimestamp, fileName, "application/json"
@@ -543,16 +543,17 @@ class TrainingCaptureActivity : AppCompatActivity() {
             } else {
                 saveLegacy(bytes, sessionTimestamp, fileName, "application/json")
             }
-            enqueueUpload(sessionTimestamp, fileName, bytes)
+            enqueueUpload(sessionTimestamp, fileName, bytes, local)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save $fileName", e)
         }
     }
 
-    private fun enqueueUpload(sessionTimestamp: String, fileName: String, bytes: ByteArray) {
+    /** [local] is the saved copy on the phone (content Uri or file path); it is deleted once uploaded. */
+    private fun enqueueUpload(sessionTimestamp: String, fileName: String, bytes: ByteArray, local: String?) {
         if (!UploadScheduler.isEnabled(this)) return
         try {
-            UploadScheduler.enqueue(this, sessionTimestamp, fileName, bytes)
+            UploadScheduler.enqueue(this, sessionTimestamp, fileName, bytes, local)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to queue upload of $fileName", e)
         }
@@ -561,7 +562,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private fun saveToMediaStore(
         collection: android.net.Uri, baseDir: String, bytes: ByteArray,
         sessionTimestamp: String, fileName: String, mimeType: String
-    ) {
+    ): String {
         val relativePath = "$baseDir/$TRAINING_DATA_DIR/$sessionTimestamp"
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -581,9 +582,10 @@ class TrainingCaptureActivity : AppCompatActivity() {
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
+        return uri.toString()
     }
 
-    private fun saveLegacy(bytes: ByteArray, sessionTimestamp: String, fileName: String, mimeType: String) {
+    private fun saveLegacy(bytes: ByteArray, sessionTimestamp: String, fileName: String, mimeType: String): String {
         val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
             ?: throw IOException("Public Pictures directory is unavailable (external storage not mounted)")
         val dir = File(picturesDir, "$TRAINING_DATA_DIR/$sessionTimestamp")
@@ -592,6 +594,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         FileOutputStream(file).use { out -> out.write(bytes) }
         // Make the new file immediately visible to gallery apps/file managers.
         MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf(mimeType), null)
+        return file.absolutePath
     }
 
     /** Shows pending/done/failed counts of queued FTP/SFTP uploads. */
