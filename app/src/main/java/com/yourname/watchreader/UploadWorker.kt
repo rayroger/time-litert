@@ -52,6 +52,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 else -> uploadFtp(config, remoteDir, file)
             }
             file.delete()
+            deleteLocalCopy(inputData.getString(KEY_LOCAL))
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -144,6 +145,26 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
     private fun remoteName(file: File) = file.name
 
+    /**
+     * The upload succeeded, so the public copy on the phone is no longer needed (the server holds
+     * it). Files created by this app can be deleted from MediaStore without extra permission.
+     */
+    private fun deleteLocalCopy(local: String?) {
+        if (local.isNullOrEmpty()) return
+        try {
+            if (local.startsWith("content://")) {
+                applicationContext.contentResolver.delete(android.net.Uri.parse(local), null, null)
+            } else {
+                val f = File(local)
+                if (f.delete()) {
+                    android.media.MediaScannerConnection.scanFile(applicationContext, arrayOf(local), null, null)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not delete local copy $local: ${e.message}")
+        }
+    }
+
     private fun joinRemote(base: String, session: String): String {
         val b = base.trim().ifEmpty { "/" }.trimEnd('/')
         return if (session.isEmpty()) b.ifEmpty { "/" } else "$b/$session"
@@ -154,9 +175,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         const val WORK_TAG = "watchreader_upload"
         const val KEY_PATH = "path"
         const val KEY_SESSION = "session"
+        const val KEY_LOCAL = "local"
         const val KEY_ERROR = "error"
-        // The chain stays blocked while a file is retrying, which keeps ordering intact; the
-        // originals always remain in the public Pictures/Documents folders on the phone.
+        // The chain stays blocked while a file is retrying, which keeps ordering intact. A file
+        // that never uploads keeps its copy in the public Pictures/Documents folders; only
+        // successfully uploaded files are removed from the phone.
         private const val MAX_ATTEMPTS = 15
         private const val TIMEOUT_MS = 20_000
     }
@@ -169,7 +192,7 @@ object UploadScheduler {
     fun isEnabled(context: Context): Boolean = UploadSettings(context).load().isUsable
 
     /** Queues [bytes] as [fileName] under [session] for upload. Safe to call from any thread. */
-    fun enqueue(context: Context, session: String, fileName: String, bytes: ByteArray) {
+    fun enqueue(context: Context, session: String, fileName: String, bytes: ByteArray, localCopy: String? = null) {
         val dir = File(context.applicationContext.filesDir, "$QUEUE_DIR/$session").apply { mkdirs() }
         val file = File(dir, fileName)
         file.writeBytes(bytes)
@@ -181,6 +204,7 @@ object UploadScheduler {
                 Data.Builder()
                     .putString(UploadWorker.KEY_PATH, file.absolutePath)
                     .putString(UploadWorker.KEY_SESSION, session)
+                    .putString(UploadWorker.KEY_LOCAL, localCopy)
                     .build()
             )
             .addTag(UploadWorker.WORK_TAG)
