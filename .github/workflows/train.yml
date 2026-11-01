@@ -1,0 +1,66 @@
+name: Train clock model
+
+# Manual runs only. Trains on CPU (free for public repos), exports model.tflite and prints METRICS in the log.
+#   dataset_url: a zip made by training/build_dataset.py (images/ + labels.csv); empty = synthetic smoke test
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_url:
+        description: "URL of dataset zip (empty = synthetic smoke test)"
+        required: false
+        default: ""
+      epochs:
+        description: "Training epochs"
+        required: false
+        default: "20"
+      synthetic_extra:
+        description: "Extra synthetic clocks added to the training set"
+        required: false
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: training/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r training/requirements.txt
+
+      - name: Fetch dataset
+        if: ${{ inputs.dataset_url != '' }}
+        run: curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url }}"
+
+      - name: Train
+        run: |
+          if [ -f dataset.zip ]; then
+            python training/train.py --data dataset.zip --epochs ${{ inputs.epochs }} \
+              --synthetic-extra ${{ inputs.synthetic_extra }} --out out
+          else
+            python training/train.py --synthetic 1500 --epochs ${{ inputs.epochs }} --no-pretrained --out out
+          fi
+
+      - name: Upload model and metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: clock-model
+          path: out/
+
+      - name: Publish model as release asset
+        if: ${{ inputs.dataset_url != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete model-latest --yes --cleanup-tag || true
+          gh release create model-latest out/model.tflite out/metrics.json \
+            --title "Latest trained model" --notes "Run ${{ github.run_id }}" --prerelease --target "${{ github.sha }}"

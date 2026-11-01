@@ -1,0 +1,4 @@
+tensorflow-cpu>=2.16
+numpy
+pillow
+opencv-python-headless
