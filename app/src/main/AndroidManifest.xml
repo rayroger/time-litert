@@ -21,7 +21,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".TrainingCaptureActivity" android:exported="false" />
+        <!-- Exported so a capture session can be started with `adb shell am start` (see the
+             EXTRA_* intent extras in TrainingCaptureActivity). -->
+        <activity android:name=".TrainingCaptureActivity" android:exported="true" />
         <activity android:name=".UploadSettingsActivity" android:exported="false" />
     </application>
 </manifest>
