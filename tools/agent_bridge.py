@@ -14,7 +14,7 @@ Job file example (jobs/job-001.json):
   {"id": "job-001", "action": "run_session", "params": {"interval_s": 15, "duration_s": 120}}
 
 Actions: ping, devices, phone_info, unlock, install_latest, run_session, screenshot,
-         logcat, pull_session
+         logcat, pull_session, app_state, swipe, key
 Only the Python standard library is used. Keep this folder OUT of any FTP server root.
 
 Usage:  python agent_bridge.py [--bridge DIR] [--adb PATH] [--once]
@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -40,7 +41,9 @@ PHONE_PICTURES = "/sdcard/Pictures/WatchReaderTrainingData"
 PHONE_DOCUMENTS = "/sdcard/Documents/WatchReaderTrainingData"
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 SESSION_RE = re.compile(r"^\d{8}_\d{6}$")
-VERSION = "1"
+LOG_MARKERS = ("TrainingCapture", "UploadWorker", "WorkManager", "AndroidRuntime", "FATAL", PKG)
+KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
+VERSION = "2"
 
 
 class BridgeError(Exception):
@@ -79,6 +82,14 @@ class Bridge:
             return proc.returncode, proc.stdout
         text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace").strip()
         return proc.returncode, text
+
+    def app_log(self, lines, everything=False):
+        """Recent logcat lines; filtered in Python (adb tag filters returned nothing on this device)."""
+        rc, out = self.adb_run("logcat", "-d", "-t", str(lines if everything else lines * 8), timeout=60)
+        rows = out.splitlines()
+        if not everything:
+            rows = [ln for ln in rows if any(m in ln for m in LOG_MARKERS)]
+        return "\n".join(rows[-lines:])
 
     @staticmethod
     def int_param(params, name, default, lo, hi):
@@ -184,8 +195,7 @@ class Bridge:
         sessions = sorted(s for s in listing.split() if SESSION_RE.match(s))
         return {"started": started, "interval_s": interval, "duration_s": duration,
                 "newest_session_on_phone": sessions[-1] if sessions else None,
-                "log_tail": self.adb_run("logcat", "-d", "-t", "60", "TrainingCapture:V",
-                                         "UploadWorker:V", "AndroidRuntime:E", "*:S")[1][-3000:]}
+                "log_tail": self.app_log(60)[-3000:]}
 
     def a_screenshot(self, params, job_id):
         self.require_device()
@@ -198,10 +208,9 @@ class Bridge:
 
     def a_logcat(self, params, job_id):
         lines = self.int_param(params, "lines", 200, 1, 3000)
+        everything = params.get("all", False) is True
         self.require_device()
-        rc, out = self.adb_run("logcat", "-d", "-t", str(lines), "TrainingCapture:V", "UploadWorker:V",
-                               "AndroidRuntime:E", "*:S", timeout=60)
-        return {"log": out[-20000:]}
+        return {"log": self.app_log(lines, everything)[-20000:]}
 
     def a_pull_session(self, params, job_id):
         session = params.get("session")
@@ -215,8 +224,38 @@ class Bridge:
             outputs.append(self.adb_run("pull", remote, str(dest), timeout=600)[1][-300:])
         return {"dest": str(dest), "files": len(list(dest.iterdir())), "output": outputs}
 
+    def a_app_state(self, params, job_id):
+        """Upload settings (secrets redacted) and how many files wait in the phone's upload queue."""
+        self.require_device()
+        rc, text = self.adb_run("shell", "run-as", PKG, "cat", "shared_prefs/upload_settings.xml")
+        settings = {}
+        try:
+            for el in ET.fromstring(text.replace("\r", "")):
+                name = el.get("name", "")
+                value = el.get("value") if el.get("value") is not None else (el.text or "")
+                settings[name] = "<set>" if ("password" in name or "key" in name) and value else value
+        except ET.ParseError:
+            settings = {"error": text[:300]}
+        rc, out = self.adb_run("shell", "run-as", PKG, "find", "files/upload_queue", "-type", "f")
+        queued = [ln for ln in out.splitlines() if ln.strip().endswith((".jpg", ".json"))]
+        return {"upload_settings": settings, "queued_files": len(queued),
+                "queue_sample": queued[:5], "recent_log": self.app_log(25)}
+
+    def a_swipe(self, params, job_id):
+        x1, y1, x2, y2 = (self.int_param(params, k, 0, 0, 5000) for k in ("x1", "y1", "x2", "y2"))
+        ms = self.int_param(params, "duration_ms", 300, 50, 3000)
+        self.require_device()
+        return {"output": self.adb_run("shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(ms))[1]}
+
+    def a_key(self, params, job_id):
+        name = params.get("name")
+        if name not in KEYS:
+            raise BridgeError(f"param name must be one of {sorted(KEYS)}")
+        self.require_device()
+        return {"output": self.adb_run("shell", "input", "keyevent", KEYS[name])[1]}
+
     ACTIONS = {"ping", "devices", "phone_info", "unlock", "install_latest", "run_session",
-               "screenshot", "logcat", "pull_session"}
+               "screenshot", "logcat", "pull_session", "app_state", "swipe", "key"}
 
     # ---- loop ----------------------------------------------------------------------------
     def process(self, job_path):
