@@ -23,7 +23,8 @@
         </activity>
         <!-- Exported so a capture session can be started with `adb shell am start` (see the
              EXTRA_* intent extras in TrainingCaptureActivity). -->
-        <activity android:name=".TrainingCaptureActivity" android:exported="true" />
+        <activity android:name=".TrainingCaptureActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
         <activity android:name=".UploadSettingsActivity" android:exported="false" />
     </application>
 </manifest>

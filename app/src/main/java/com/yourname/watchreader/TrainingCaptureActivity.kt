@@ -171,7 +171,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         startCamera()
-        handleAutoStart(intent)
+        // Only on a fresh launch: if Android re-creates the activity (e.g. rotation) while a
+        // session is running, re-reading the launch extras would start a second session.
+        if (savedInstanceState == null) handleAutoStart(intent)
     }
 
     /** Starts a timed session when launched with [EXTRA_AUTO_START] (used for adb-driven runs). */
