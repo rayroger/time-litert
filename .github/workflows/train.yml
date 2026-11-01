@@ -1,0 +1,77 @@
+name: Train clock model
+
+# Manual runs (and a short synthetic smoke test on pull requests touching training/). Trains on CPU (free for public repos), exports model.tflite and prints METRICS in the log.
+#   dataset_url: a zip made by training/build_dataset.py (images/ + labels.csv); empty = synthetic smoke test
+on:
+  pull_request:
+    paths: [ "training/**", ".github/workflows/train.yml" ]
+  workflow_dispatch:
+    inputs:
+      dataset_url:
+        description: "URL of dataset zip (empty = synthetic smoke test)"
+        required: false
+        default: ""
+      epochs:
+        description: "Training epochs"
+        required: false
+        default: "20"
+      synthetic_n:
+        description: "Synthetic smoke-test size when no dataset_url is given"
+        required: false
+        default: "1200"
+      pretrained:
+        description: "Use ImageNet weights in the synthetic test (true/false)"
+        required: false
+        default: "false"
+      synthetic_extra:
+        description: "Extra synthetic clocks added to the training set"
+        required: false
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: training/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r training/requirements.txt
+
+      - name: Fetch dataset
+        if: ${{ inputs.dataset_url != '' }}
+        run: curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url }}"
+
+      - name: Train
+        run: |
+          if [ -f dataset.zip ]; then
+            python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --out out
+          else
+            FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
+            python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
+          fi
+
+      - name: Upload model and metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: clock-model
+          path: out/
+
+      - name: Publish model as release asset
+        if: ${{ inputs.dataset_url != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete model-latest --yes --cleanup-tag || true
+          gh release create model-latest out/model.tflite out/metrics.json \
+            --title "Latest trained model" --notes "Run ${{ github.run_id }}" --prerelease --target "${{ github.sha }}"
