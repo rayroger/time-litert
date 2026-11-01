@@ -36,6 +36,17 @@ android {
         viewBinding = true
     }
 
+    // Fixed debug key (committed on purpose, it protects nothing): every CI build is signed
+    // the same way, so `adb install -r` can upgrade in place and keep the app's settings.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

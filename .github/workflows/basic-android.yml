@@ -16,6 +16,9 @@ on:
         - debug
         - release
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -72,3 +75,21 @@ jobs:
       with:
         name: ${{ github.event.inputs.buildType }}-build
         path: app/build/outputs/apk/${{ github.event.inputs.buildType }}/
+
+    # Publishes the newest main build at a fixed, public URL so a PC (or any script) can fetch it
+    # without a GitHub login:
+    #   https://github.com/rayroger/time-litert/releases/download/latest-build/app-debug.apk
+    - name: Publish APK as release asset (main only)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        APK=$(ls app/build/outputs/apk/debug/*.apk | head -n 1)
+        cp "$APK" app-debug.apk
+        sha256sum app-debug.apk | cut -d' ' -f1 > app-debug.apk.sha256
+        echo "1.0.${{ github.run_number }}" > version.txt
+        gh release delete latest-build --yes --cleanup-tag || true
+        gh release create latest-build app-debug.apk app-debug.apk.sha256 version.txt \
+          --title "Latest build (1.0.${{ github.run_number }})" \
+          --notes "Automated debug build of ${{ github.sha }}" \
+          --prerelease --target "${{ github.sha }}"
