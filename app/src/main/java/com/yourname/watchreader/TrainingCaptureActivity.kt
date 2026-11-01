@@ -323,7 +323,10 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
         val detections: List<WatchDetection> = withContext(Dispatchers.IO) {
             try {
-                val found = detector?.detect(bitmap) ?: emptyList()
+                // Number watches left to right (then top to bottom) instead of by detector score,
+                // so with a fixed camera the same physical watch keeps the same dial_index.
+                val found = (detector?.detect(bitmap) ?: emptyList())
+                    .sortedWith(compareBy({ it.box.centerX() }, { it.box.centerY() }))
                 found.forEachIndexed { i, d ->
                     Log.d(TAG, "capture $index detection ${i + 1}: ${d.category} score=${d.score} box=${d.box}")
                 }
