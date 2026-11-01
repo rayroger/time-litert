@@ -155,7 +155,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         const val KEY_PATH = "path"
         const val KEY_SESSION = "session"
         const val KEY_ERROR = "error"
-        private const val MAX_ATTEMPTS = 5
+        // The chain stays blocked while a file is retrying, which keeps ordering intact; the
+        // originals always remain in the public Pictures/Documents folders on the phone.
+        private const val MAX_ATTEMPTS = 15
         private const val TIMEOUT_MS = 20_000
     }
 }
@@ -174,7 +176,7 @@ object UploadScheduler {
 
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
             .setInputData(
                 Data.Builder()
                     .putString(UploadWorker.KEY_PATH, file.absolutePath)
@@ -183,7 +185,10 @@ object UploadScheduler {
             )
             .addTag(UploadWorker.WORK_TAG)
             .build()
+        // One chain per session so files upload strictly one at a time, in the order they were
+        // saved (image first, then its JSON). Parallel jobs overloaded small FTP servers and left
+        // images without their metadata (and the reverse).
         WorkManager.getInstance(context.applicationContext)
-            .enqueueUniqueWork("upload_${session}_$fileName", ExistingWorkPolicy.REPLACE, request)
+            .enqueueUniqueWork("upload_chain_$session", ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 }

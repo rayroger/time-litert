@@ -73,6 +73,16 @@ class TrainingCaptureActivity : AppCompatActivity() {
          * classes reference [FileServer.TRAINING_DATA_DIR] rather than duplicating the value.
          */
         private val TRAINING_DATA_DIR = FileServer.TRAINING_DATA_DIR
+
+        /**
+         * Intent extras for starting a session without touching the screen, e.g.
+         * `adb shell am start -n com.yourname.watchreader/.TrainingCaptureActivity
+         *      --ez auto_start true --el interval_seconds 15 --el duration_seconds 300`
+         */
+        const val EXTRA_AUTO_START = "auto_start"
+        const val EXTRA_INTERVAL_SECONDS = "interval_seconds"
+        const val EXTRA_DURATION_SECONDS = "duration_seconds"
+        private const val CAMERA_READY_TIMEOUT_MS = 15_000L
     }
 
     private lateinit var previewView: PreviewView
@@ -157,7 +167,37 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
         observeUploads()
 
+        // Keep the screen awake so unattended sessions are not interrupted by the lock screen.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         startCamera()
+        handleAutoStart(intent)
+    }
+
+    /** Starts a timed session when launched with [EXTRA_AUTO_START] (used for adb-driven runs). */
+    private fun handleAutoStart(launchIntent: Intent?) {
+        if (launchIntent?.getBooleanExtra(EXTRA_AUTO_START, false) != true) return
+        val interval = launchIntent.getLongExtra(EXTRA_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS)
+        val duration = launchIntent.getLongExtra(EXTRA_DURATION_SECONDS, 0L)
+        intervalInput.setText(interval.toString())
+
+        lifecycleScope.launch {
+            // The camera binds asynchronously; wait for it so the first frame is not skipped.
+            var waited = 0L
+            while (imageCapture == null && waited < CAMERA_READY_TIMEOUT_MS) {
+                delay(200)
+                waited += 200
+            }
+            if (imageCapture == null) {
+                statusText.text = getString(R.string.error_template, "Camera not ready (permission?)")
+                return@launch
+            }
+            startCaptureLoop()
+            if (duration > 0) {
+                delay(duration * 1000)
+                stopCaptureLoop()
+            }
+        }
     }
 
     private fun startCamera() {
