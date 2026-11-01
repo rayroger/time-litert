@@ -1,8 +1,10 @@
 name: Train clock model
 
-# Manual runs only. Trains on CPU (free for public repos), exports model.tflite and prints METRICS in the log.
+# Manual runs (and a short synthetic smoke test on pull requests touching training/). Trains on CPU (free for public repos), exports model.tflite and prints METRICS in the log.
 #   dataset_url: a zip made by training/build_dataset.py (images/ + labels.csv); empty = synthetic smoke test
 on:
+  pull_request:
+    paths: [ "training/**", ".github/workflows/train.yml" ]
   workflow_dispatch:
     inputs:
       dataset_url:
@@ -44,10 +46,10 @@ jobs:
       - name: Train
         run: |
           if [ -f dataset.zip ]; then
-            python training/train.py --data dataset.zip --epochs ${{ inputs.epochs }} \
-              --synthetic-extra ${{ inputs.synthetic_extra }} --out out
+            python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --out out
           else
-            python training/train.py --synthetic 1500 --epochs ${{ inputs.epochs }} --no-pretrained --out out
+            python training/train.py --synthetic 1200 --epochs ${{ inputs.epochs || '4' }} --no-pretrained --out out
           fi
 
       - name: Upload model and metrics
