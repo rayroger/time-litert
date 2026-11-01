@@ -103,13 +103,37 @@ class WatchDetector(
         private const val TILE_FRACTION = 0.6f
         private const val NMS_IOU_THRESHOLD = 0.5f
 
-        /** Greedy IoU-based non-maximum suppression; result is sorted by descending score. */
+        /** A box lying mostly inside another one is a partial view of the same watch. */
+        private const val CONTAINMENT_THRESHOLD = 0.7f
+
+        /**
+         * Greedy non-maximum suppression that also merges partial views: tile passes clip a watch
+         * at the tile border, which yields a smaller box inside the full one with a low IoU. Boxes
+         * that overlap by IoU or are mostly contained in a kept box are folded into it (the kept
+         * box grows to their union, keeping the higher score). Result is sorted by descending score.
+         */
         internal fun nms(detections: List<WatchDetection>, iouThreshold: Float): List<WatchDetection> {
             val kept = mutableListOf<WatchDetection>()
             for (d in detections.sortedByDescending { it.score }) {
-                if (kept.none { iou(it.box, d.box) > iouThreshold }) kept += d
+                val i = kept.indexOfFirst { same(it.box, d.box, iouThreshold) }
+                if (i < 0) {
+                    kept += d
+                } else {
+                    val box = RectF(kept[i].box)
+                    box.union(d.box)
+                    kept[i] = kept[i].copy(box = box)
+                }
             }
             return kept
+        }
+
+        private fun same(a: RectF, b: RectF, iouThreshold: Float): Boolean {
+            val iw = minOf(a.right, b.right) - maxOf(a.left, b.left)
+            val ih = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+            if (iw <= 0f || ih <= 0f) return false
+            val inter = iw * ih
+            val smaller = minOf(a.width() * a.height(), b.width() * b.height())
+            return iou(a, b) > iouThreshold || (smaller > 0f && inter / smaller > CONTAINMENT_THRESHOLD)
         }
 
         private fun iou(a: RectF, b: RectF): Float {
