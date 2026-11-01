@@ -14,7 +14,13 @@ Job file example (jobs/job-001.json):
   {"id": "job-001", "action": "run_session", "params": {"interval_s": 15, "duration_s": 120}}
 
 Actions: ping, devices, phone_info, unlock, install_latest, run_session, screenshot,
-         logcat, pull_session, app_state, swipe, key
+         logcat, pull_session, app_state, swipe, key, publish_release_asset
+
+publish_release_asset uploads one file from <bridge>/files to a GitHub release of REPO (tag
+dataset-* or model-*), replacing an asset of the same name. It needs a fine-grained token
+limited to this repo (Contents: read/write) in the GITHUB_TOKEN environment variable, set
+before starting the bridge:   set GITHUB_TOKEN=github_pat_...   then   python agent_bridge.py
+The token is never written to results or logs.
 Only the Python standard library is used. Keep this folder OUT of any FTP server root.
 
 Usage:  python agent_bridge.py [--bridge DIR] [--adb PATH] [--once]
@@ -28,6 +34,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -42,8 +50,11 @@ PHONE_DOCUMENTS = "/sdcard/Documents/WatchReaderTrainingData"
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 SESSION_RE = re.compile(r"^\d{8}_\d{6}$")
 LOG_MARKERS = ("TrainingCapture", "UploadWorker", "WorkManager", "AndroidRuntime", "FATAL", PKG)
+ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+TAG_RE = re.compile(r"^(dataset|model)-[A-Za-z0-9._-]{1,40}$")
+ASSET_SUFFIXES = (".zip", ".json", ".csv", ".tflite")
 KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
-VERSION = "2"
+VERSION = "3"
 
 
 class BridgeError(Exception):
@@ -68,6 +79,8 @@ class Bridge:
     def __init__(self, root, adb):
         self.root = Path(root)
         self.adb = adb
+        self.api_base = "https://api.github.com"
+        self.upload_base = "https://uploads.github.com"
         self.jobs = self.root / "jobs"
         self.results = self.root / "results"
         self.done = self.root / "done"
@@ -114,7 +127,8 @@ class Bridge:
 
     # ---- actions -------------------------------------------------------------------------
     def a_ping(self, params, job_id):
-        return {"time": now(), "adb": self.adb, "bridge_version": VERSION, "python": sys.version.split()[0]}
+        return {"time": now(), "adb": self.adb, "bridge_version": VERSION, "python": sys.version.split()[0],
+                "github_token_set": bool(self.github_token())}
 
     def a_devices(self, params, job_id):
         return {"devices": self.adb_run("devices", "-l")[1]}
@@ -254,8 +268,59 @@ class Bridge:
         self.require_device()
         return {"output": self.adb_run("shell", "input", "keyevent", KEYS[name])[1]}
 
+    @staticmethod
+    def github_token():
+        return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    def github_json(self, method, path, payload=None, allow_404=False):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(self.api_base + path, data=data, method=method, headers={
+            "Authorization": f"Bearer {self.github_token()}", "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json", "User-Agent": "agent-bridge"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = resp.read()
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and allow_404:
+                return None
+            raise BridgeError(f"GitHub {method} {path} failed: HTTP {e.code} {e.read()[:200].decode('utf-8', 'replace')}")
+
+    def a_publish_release_asset(self, params, job_id):
+        if not self.github_token():
+            raise BridgeError("GITHUB_TOKEN is not set for the bridge: set it, then restart the bridge")
+        rel, tag = params.get("file"), params.get("tag", "dataset-latest")
+        if not isinstance(rel, str) or not isinstance(tag, str) or not TAG_RE.match(tag):
+            raise BridgeError("params: file (path inside bridge/files) and tag (dataset-* or model-*)")
+        path = (self.files / rel).resolve()
+        if self.files.resolve() not in path.parents or not path.is_file():
+            raise BridgeError("file must be an existing file inside the bridge files folder")
+        if not ASSET_RE.match(path.name) or path.suffix.lower() not in ASSET_SUFFIXES:
+            raise BridgeError(f"asset name must match {ASSET_RE.pattern} and end in {ASSET_SUFFIXES}")
+        release = self.github_json("GET", f"/repos/{REPO}/releases/tags/{tag}", allow_404=True)
+        if release is None:
+            release = self.github_json("POST", f"/repos/{REPO}/releases", {
+                "tag_name": tag, "name": tag, "prerelease": True, "target_commitish": "main",
+                "body": "Uploaded by the PC agent bridge."})
+        for asset in self.github_json("GET", f"/repos/{REPO}/releases/{release['id']}/assets?per_page=100") or []:
+            if asset.get("name") == path.name:
+                self.github_json("DELETE", f"/repos/{REPO}/releases/assets/{asset['id']}")
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            req = urllib.request.Request(
+                f"{self.upload_base}/repos/{REPO}/releases/{release['id']}/assets?name={urllib.parse.quote(path.name)}",
+                data=fh, method="POST", headers={
+                    "Authorization": f"Bearer {self.github_token()}", "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/octet-stream", "Content-Length": str(size), "User-Agent": "agent-bridge"})
+            try:
+                with urllib.request.urlopen(req, timeout=1800) as resp:
+                    resp.read()
+            except urllib.error.HTTPError as e:
+                raise BridgeError(f"upload failed: HTTP {e.code} {e.read()[:200].decode('utf-8', 'replace')}")
+        return {"url": f"https://github.com/{REPO}/releases/download/{tag}/{path.name}", "bytes": size}
+
     ACTIONS = {"ping", "devices", "phone_info", "unlock", "install_latest", "run_session",
-               "screenshot", "logcat", "pull_session", "app_state", "swipe", "key"}
+               "screenshot", "logcat", "pull_session", "app_state", "swipe", "key", "publish_release_asset"}
 
     # ---- loop ----------------------------------------------------------------------------
     def process(self, job_path):
