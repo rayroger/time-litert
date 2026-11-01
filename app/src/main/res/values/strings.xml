@@ -43,4 +43,10 @@
     <string name="upload_status">Remote upload: %1$d pending, %2$d done, %3$d failed%4$s</string>
     <string name="upload_invalid_port">Enter a port between 1 and 65535</string>
     <string name="upload_host_user_required">Host and username are required</string>
+    <string name="live_starting">Camera starting…</string>
+    <string name="live_no_watches">No watch in view</string>
+    <string name="live_watches_in_view">In view: %1$d watch(es)</string>
+    <string name="action_settings">Settings</string>
+    <string name="capture_start">Start capture</string>
+    <string name="capture_stop">Stop capture</string>
 </resources>
