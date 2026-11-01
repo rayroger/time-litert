@@ -8,3 +8,5 @@ app/build
 *.apk
 *.aab
 .cxx
+__pycache__/
+*.pyc
