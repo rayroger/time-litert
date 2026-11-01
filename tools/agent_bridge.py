@@ -21,6 +21,10 @@ dataset-* or model-*), replacing an asset of the same name. It needs a fine-grai
 limited to this repo (Contents: read/write) in the GITHUB_TOKEN environment variable, set
 before starting the bridge:   set GITHUB_TOKEN=github_pat_...   then   python agent_bridge.py
 The token is never written to results or logs.
+
+Optional param delete_sessions (list of session folder names like 20261101_192858): after the
+upload succeeded, those folders are removed from the FTP data folder given with --data. Sessions
+touched in the last 15 minutes (still receiving uploads) are skipped.
 Only the Python standard library is used. Keep this folder OUT of any FTP server root.
 
 Usage:  python agent_bridge.py [--bridge DIR] [--adb PATH] [--once]
@@ -54,7 +58,7 @@ ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 TAG_RE = re.compile(r"^(dataset|model)-[A-Za-z0-9._-]{1,40}$")
 ASSET_SUFFIXES = (".zip", ".json", ".csv", ".tflite")
 KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
-VERSION = "3"
+VERSION = "4"
 
 
 class BridgeError(Exception):
@@ -79,6 +83,7 @@ class Bridge:
     def __init__(self, root, adb):
         self.root = Path(root)
         self.adb = adb
+        self.data_dir = None  # FTP server data folder (--data), needed for delete_sessions
         self.api_base = "https://api.github.com"
         self.upload_base = "https://uploads.github.com"
         self.jobs = self.root / "jobs"
@@ -317,7 +322,31 @@ class Bridge:
                     resp.read()
             except urllib.error.HTTPError as e:
                 raise BridgeError(f"upload failed: HTTP {e.code} {e.read()[:200].decode('utf-8', 'replace')}")
-        return {"url": f"https://github.com/{REPO}/releases/download/{tag}/{path.name}", "bytes": size}
+        result = {"url": f"https://github.com/{REPO}/releases/download/{tag}/{path.name}", "bytes": size}
+        if params.get("delete_sessions"):
+            result.update(self.delete_sessions(params["delete_sessions"]))
+        return result
+
+    def delete_sessions(self, sessions):
+        """Removes uploaded session folders from the FTP data folder. Only called after a publish."""
+        if self.data_dir is None:
+            raise BridgeError("upload succeeded, but nothing was deleted: start the bridge with --data <ftp data folder>")
+        if not isinstance(sessions, list) or not all(isinstance(x, str) and SESSION_RE.match(x) for x in sessions):
+            raise BridgeError("upload succeeded, but delete_sessions must be a list of names like 20261101_192858")
+        base = self.data_dir.resolve()
+        deleted, skipped = [], []
+        for name in sessions:
+            folder = (base / name).resolve()
+            if folder.parent != base or not folder.is_dir():
+                skipped.append(name)
+                continue
+            newest = max([folder.stat().st_mtime] + [p.stat().st_mtime for p in folder.rglob("*")])
+            if time.time() - newest < 15 * 60:
+                skipped.append(name)
+                continue
+            shutil.rmtree(folder)
+            deleted.append(name)
+        return {"deleted_sessions": deleted, "skipped_sessions": skipped}
 
     ACTIONS = {"ping", "devices", "phone_info", "unlock", "install_latest", "run_session",
                "screenshot", "logcat", "pull_session", "app_state", "swipe", "key", "publish_release_asset"}
@@ -368,8 +397,12 @@ def main():
     ap.add_argument("--bridge", default=str(Path.home() / "agent-bridge"))
     ap.add_argument("--adb")
     ap.add_argument("--once", action="store_true", help="process waiting jobs, then exit (for testing)")
+    ap.add_argument("--data", help="FTP server data folder holding the session folders (enables delete_sessions)")
     args = ap.parse_args()
-    Bridge(args.bridge, find_adb(args.adb)).run(once=args.once)
+    bridge = Bridge(args.bridge, find_adb(args.adb))
+    if args.data:
+        bridge.data_dir = Path(args.data)
+    bridge.run(once=args.once)
 
 
 if __name__ == "__main__":

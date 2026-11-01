@@ -24,6 +24,37 @@ from pathlib import Path
 import cv2
 
 
+MASTER_FIELDS = ["file", "minutes_12h", "session", "watch", "timestamp", "confidence", "aspect", "blur"]
+
+
+def merge_archive(archive, new_rows):
+    """Adds new_rows (with '_path') to the archive and returns all archived rows (with '_path')."""
+    (archive / "images").mkdir(parents=True, exist_ok=True)
+    master = archive / "master.csv"
+    old = {}
+    if master.exists():
+        with open(master, newline="") as f:
+            for r in csv.DictReader(f):
+                for k in ("minutes_12h", "timestamp", "confidence", "aspect", "blur"):
+                    r[k] = float(r[k])
+                old[r["file"]] = r
+    added = 0
+    for r in new_rows:
+        if r["file"] not in old:
+            shutil.copy2(r["_path"], archive / "images" / r["file"])
+            old[r["file"]] = {k: v for k, v in r.items() if k != "_path"}
+            added += 1
+    rows = sorted(old.values(), key=lambda r: r["timestamp"])
+    with open(master, "w", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=MASTER_FIELDS)
+        wr.writeheader()
+        wr.writerows({k: r[k] for k in MASTER_FIELDS} for r in rows)
+    print(f"archive {archive}: +{added} new crops, {len(rows)} total")
+    for r in rows:
+        r["_path"] = archive / "images" / r["file"]
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="folder holding the session folders (Rebex data folder)")
@@ -39,6 +70,9 @@ def main():
     ap.add_argument("--split", choices=["time", "watch"], default="time",
                     help="time: hold out the end of the timeline (default); watch: hold out whole watch groups "
                          "(only meaningful once watches have stable ids across sessions)")
+    ap.add_argument("--archive", help="persistent folder (images/ + master.csv) that accumulates every kept crop "
+                    "across runs, so raw session folders can be deleted once they are in it; the output "
+                    "dataset is built from the whole archive")
     ap.add_argument("--zip", action="store_true")
     args = ap.parse_args()
 
@@ -75,11 +109,12 @@ def main():
                 minutes = (dt.hour % 12) * 60 + dt.minute + dt.second / 60.0 + dt.microsecond / 6e7
                 minutes = (minutes + float(offsets.get(cap["session"], 0.0))) % 720.0
                 name = f"{cap['session']}_{jpg.name}"
-                shutil.copy2(jpg, out / "images" / name)
-                rows.append({"file": name, "minutes_12h": round(minutes, 4), "session": cap["session"],
+                rows.append({"_path": jpg, "file": name, "minutes_12h": round(minutes, 4), "session": cap["session"],
                              "watch": f"{cap['session']}_d{cap['dial_index']}", "timestamp": dt.timestamp(),
                              "confidence": round(conf, 3), "aspect": round(aspect, 3), "blur": round(blur, 1)})
 
+    if args.archive:
+        rows = merge_archive(Path(args.archive), rows)
     if not rows:
         raise SystemExit(f"no usable crops found (skipped: {skipped})")
 
@@ -98,6 +133,8 @@ def main():
         rows = [r for r in rows if r["split"] != "gap"]
         mode = f"held out the last {args.val_fraction:.0%} of the timeline ({len(watches)} watch groups)"
 
+    for r in rows:
+        shutil.copy2(r.pop("_path"), out / "images" / r["file"])
     with open(out / "labels.csv", "w", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         wr.writeheader()
