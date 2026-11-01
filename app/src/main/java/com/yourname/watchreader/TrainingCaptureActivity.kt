@@ -18,6 +18,7 @@ import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -40,6 +41,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -83,6 +86,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
         const val EXTRA_INTERVAL_SECONDS = "interval_seconds"
         const val EXTRA_DURATION_SECONDS = "duration_seconds"
         private const val CAMERA_READY_TIMEOUT_MS = 15_000L
+        private const val LIVE_INTERVAL_MS = 700L
+        private const val LIVE_MAX_SIDE = 1280
     }
 
     private lateinit var previewView: PreviewView
@@ -95,6 +100,13 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private lateinit var uploadSettingsButton: Button
     private lateinit var uploadStatusText: TextView
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var liveOverlay: LiveOverlayView
+    private lateinit var liveStatusText: TextView
+    private lateinit var settingsButton: Button
+    private lateinit var settingsPanel: View
+
+    /** The detector is not thread-safe: the live preview and the capture loop take turns. */
+    private val detectorMutex = Mutex()
 
     private var imageCapture: ImageCapture? = null
     private var cameraControl: CameraControl? = null
@@ -149,6 +161,10 @@ class TrainingCaptureActivity : AppCompatActivity() {
         serverStatusText = findViewById(R.id.serverStatusText)
         uploadSettingsButton = findViewById(R.id.uploadSettingsButton)
         uploadStatusText = findViewById(R.id.uploadStatusText)
+        liveOverlay = findViewById(R.id.liveOverlay)
+        liveStatusText = findViewById(R.id.liveStatusText)
+        settingsButton = findViewById(R.id.settingsButton)
+        settingsPanel = findViewById(R.id.settingsPanel)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -165,7 +181,11 @@ class TrainingCaptureActivity : AppCompatActivity() {
         uploadSettingsButton.setOnClickListener {
             startActivity(Intent(this, UploadSettingsActivity::class.java))
         }
+        settingsButton.setOnClickListener {
+            settingsPanel.visibility = if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
         observeUploads()
+        startLiveDetection()
 
         // Keep the screen awake so unattended sessions are not interrupted by the lock screen.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -260,8 +280,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
         captureCount = 0
         watchCount = 0
 
-        startButton.isEnabled = false
-        stopButton.isEnabled = true
+        startButton.visibility = View.GONE
+        stopButton.visibility = View.VISIBLE
+        settingsPanel.visibility = View.GONE
         intervalInput.isEnabled = false
 
         captureLoopJob = lifecycleScope.launch {
@@ -276,8 +297,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
         captureLoopJob?.cancel()
         captureLoopJob = null
 
-        startButton.isEnabled = true
-        stopButton.isEnabled = false
+        startButton.visibility = View.VISIBLE
+        stopButton.visibility = View.GONE
         intervalInput.isEnabled = true
 
         statusText.text = getString(R.string.training_status_stopped, captureCount, watchCount)
@@ -327,7 +348,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
             try {
                 // Number watches left to right (then top to bottom) instead of by detector score,
                 // so with a fixed camera the same physical watch keeps the same dial_index.
-                val found = (detector?.detect(bitmap) ?: emptyList())
+                val found = detectorMutex.withLock { detector?.detect(bitmap) ?: emptyList() }
                     .sortedWith(compareBy({ it.box.centerX() }, { it.box.centerY() }))
                 found.forEachIndexed { i, d ->
                     Log.d(TAG, "capture $index detection ${i + 1}: ${d.category} score=${d.score} box=${d.box}")
@@ -398,6 +419,57 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 R.string.training_save_location,
                 "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$timestamp"
             )
+    }
+
+    /**
+     * Runs the detector on the live preview a couple of times per second and draws a numbered box
+     * around every watch it sees, so you can check framing before and during a session. The
+     * numbers match the left-to-right dial_index used in the saved files.
+     */
+    private fun startLiveDetection() {
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(LIVE_INTERVAL_MS)
+                val detector = watchDetector ?: continue
+                if (imageCapture == null || previewView.width == 0) continue
+                val frame = previewView.bitmap ?: continue
+                if (!detectorMutex.tryLock()) {
+                    frame.recycle()
+                    continue
+                }
+                val viewW = previewView.width.toFloat()
+                val viewH = previewView.height.toFloat()
+                val boxes = try {
+                    withContext(Dispatchers.IO) {
+                        val longSide = maxOf(frame.width, frame.height)
+                        val small = if (longSide > LIVE_MAX_SIDE) {
+                            val f = LIVE_MAX_SIDE.toFloat() / longSide
+                            Bitmap.createScaledBitmap(frame, (frame.width * f).toInt(), (frame.height * f).toInt(), true)
+                        } else frame
+                        try {
+                            val sx = viewW / small.width
+                            val sy = viewH / small.height
+                            detector.detect(small)
+                                .sortedWith(compareBy({ it.box.centerX() }, { it.box.centerY() }))
+                                .mapIndexed { i, d ->
+                                    LiveBox(RectF(d.box.left * sx, d.box.top * sy, d.box.right * sx, d.box.bottom * sy), i + 1, d.score)
+                                }
+                        } finally {
+                            if (small !== frame) small.recycle()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Live detection failed: ${e.message}")
+                    emptyList()
+                } finally {
+                    detectorMutex.unlock()
+                    frame.recycle()
+                }
+                liveOverlay.setBoxes(boxes)
+                liveStatusText.text = if (boxes.isEmpty()) getString(R.string.live_no_watches)
+                else getString(R.string.live_watches_in_view, boxes.size)
+            }
+        }
     }
 
     private fun cropWatch(bitmap: Bitmap, box: RectF): Pair<Bitmap, android.graphics.Rect>? {
@@ -579,6 +651,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 text += "\n" + getString(R.string.server_port_fallback_note, FileServer.DEFAULT_PORT, port)
             }
             serverStatusText.text = text
+            serverStatusText.visibility = View.VISIBLE
             serverToggleButton.text = getString(R.string.action_stop_server)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start file server", e)
@@ -595,6 +668,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
         fileServer = null
         serverStatusText.text = getString(R.string.server_status_stopped)
+        serverStatusText.visibility = View.GONE
         serverToggleButton.text = getString(R.string.action_start_server)
     }
 
