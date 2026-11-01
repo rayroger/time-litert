@@ -15,6 +15,14 @@ on:
         description: "Training epochs"
         required: false
         default: "20"
+      synthetic_n:
+        description: "Synthetic smoke-test size when no dataset_url is given"
+        required: false
+        default: "1200"
+      pretrained:
+        description: "Use ImageNet weights in the synthetic test (true/false)"
+        required: false
+        default: "false"
       synthetic_extra:
         description: "Extra synthetic clocks added to the training set"
         required: false
@@ -49,7 +57,8 @@ jobs:
             python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
               --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --out out
           else
-            python training/train.py --synthetic 1200 --epochs ${{ inputs.epochs || '4' }} --no-pretrained --out out
+            FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
+            python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
           fi
 
       - name: Upload model and metrics
