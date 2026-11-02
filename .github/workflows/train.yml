@@ -27,6 +27,10 @@ on:
         description: "Extra synthetic clocks added to the training set"
         required: false
         default: "0"
+      init_weights_url:
+        description: "URL of clock.weights.h5 from an earlier run: continue training from it (empty = start fresh)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -51,14 +55,21 @@ jobs:
         if: ${{ inputs.dataset_url != '' }}
         run: curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url }}"
 
+      - name: Fetch starting weights
+        if: ${{ inputs.init_weights_url != '' }}
+        run: curl -fL --retry 3 -o init.weights.h5 "${{ inputs.init_weights_url }}"
+
       - name: Train
         run: |
+          INIT=""; [ -f init.weights.h5 ] && INIT="--init-weights init.weights.h5"
           if [ -f dataset.zip ]; then
             python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
-              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --out out
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} $INIT --out out
           else
             FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
             python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
+            # smoke-test the continue-from-weights path too
+            python training/train.py --synthetic 200 --epochs 1 $FLAGS --init-weights out/clock.weights.h5 --out out2
           fi
 
       - name: Upload model and metrics
@@ -73,5 +84,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete model-latest --yes --cleanup-tag || true
-          gh release create model-latest out/model.tflite out/metrics.json \
+          gh release create model-latest out/model.tflite out/metrics.json out/clock.weights.h5 \
             --title "Latest trained model" --notes "Run ${{ github.run_id }}" --prerelease --target "${{ github.sha }}"

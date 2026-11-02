@@ -67,9 +67,13 @@ def main():
     ap.add_argument("--min-blur", type=float, default=50.0)
     ap.add_argument("--val-fraction", type=float, default=0.2)
     ap.add_argument("--gap-minutes", type=float, default=3.0)
-    ap.add_argument("--split", choices=["time", "watch"], default="time",
-                    help="time: hold out the end of the timeline (default); watch: hold out whole watch groups "
-                         "(only meaningful once watches have stable ids across sessions)")
+    ap.add_argument("--split", choices=["blocks", "time", "watch"], default="blocks",
+                    help="blocks (default): hold out every --val-every-th block of --block-minutes of the "
+                         "timeline, so validation hours/minutes are ones training has seen on other watches "
+                         "and positions; time: hold out the end of the timeline (unseen hours: much harder); "
+                         "watch: hold out whole watch groups")
+    ap.add_argument("--block-minutes", type=float, default=10.0)
+    ap.add_argument("--val-every", type=int, default=5)
     ap.add_argument("--archive", help="persistent folder (images/ + master.csv) that accumulates every kept crop "
                     "across runs, so raw session folders can be deleted once they are in it; the output "
                     "dataset is built from the whole archive")
@@ -124,6 +128,21 @@ def main():
         for r in rows:
             r["split"] = "validation" if r["watch"] in held else "train"
         mode = f"held out {len(held)} of {len(watches)} watch groups"
+    elif args.split == "blocks":
+        block = args.block_minutes * 60
+        gap = args.gap_minutes * 60
+        val_blocks = {int(r["timestamp"] // block) for r in rows if int(r["timestamp"] // block) % args.val_every == 0}
+        val_spans = [(b * block, (b + 1) * block) for b in val_blocks]
+        for r in rows:
+            t = r["timestamp"]
+            if int(t // block) in val_blocks:
+                r["split"] = "validation"
+            elif any(lo - gap < t < hi + gap for lo, hi in val_spans):
+                r["split"] = "gap"  # too close to a validation block: near-identical frames
+            else:
+                r["split"] = "train"
+        rows = [r for r in rows if r["split"] != "gap"]
+        mode = f"held out every {args.val_every}th {args.block_minutes:g}-minute block, gap {args.gap_minutes:g} min"
     else:
         times = sorted({r["timestamp"] for r in rows})
         cut = times[int(len(times) * (1 - args.val_fraction))] if len(times) > 1 else times[0] + 1
