@@ -90,6 +90,8 @@ def main():
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--no-pretrained", action="store_true")
+    ap.add_argument("--init-weights", help="clock.weights.h5 from an earlier run: continue training from it "
+                    "(fine-tune on new data) instead of starting from ImageNet")
     ap.add_argument("--out", default="out")
     args = ap.parse_args()
 
@@ -118,6 +120,9 @@ def main():
     print("data:", data_info, flush=True)
 
     train_model, infer_model, base = build_models(pretrained=not args.no_pretrained)
+    if args.init_weights:
+        infer_model.load_weights(args.init_weights)  # layers are shared with train_model
+        print("continuing from", args.init_weights, flush=True)
     yt = time_to_targets(tt).astype("float32")
     yv = time_to_targets(tv).astype("float32")
     history = {}
@@ -143,6 +148,7 @@ def main():
     converter.target_spec.supported_types = [tf.float16]
     tflite = converter.convert()
     (out / "model.tflite").write_bytes(tflite)
+    infer_model.save_weights(out / "clock.weights.h5")
 
     # Sanity check: the exported model must agree with the Keras model on validation images.
     interp = tf.lite.Interpreter(model_content=tflite)
