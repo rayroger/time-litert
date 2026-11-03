@@ -64,10 +64,9 @@ def build_models(pretrained):
     aug = tf.keras.Sequential([
         layers.RandomTranslation(0.04, 0.04),
         layers.RandomZoom(0.08),
-        layers.RandomRotation(0.03, fill_mode="reflect"),  # +-11 deg whole-dial tilt: the dial's 12 marker tilts with the hands, so the reading is unchanged
         layers.RandomBrightness(0.25, value_range=(0, 255)),
         layers.RandomContrast(0.25),
-    ], name="augment")  # no flips: a mirrored dial reads a different time
+    ], name="augment")  # no rotation/flip: the targets are hand angles in the image frame (12 at the top), so either would make the labels wrong
 
     inp = tf.keras.Input((IMG, IMG, 3), name="dial")
     train_model = tf.keras.Model(inp, out(drop(dense(base(aug(inp))))), name="clock_train")
