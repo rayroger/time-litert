@@ -22,10 +22,27 @@ def draw_clock(rng, minutes_of_12h, size=224):
     t = minutes_of_12h % 720
     ha = np.deg2rad(t / 720 * 360)
     ma = np.deg2rad((t % 60) / 60 * 360)
-    hl, ml = r * rng.uniform(0.45, 0.55), r * rng.uniform(0.7, 0.85)
-    for ang, ln, w in ((ha, hl, int(rng.integers(4, 8))), (ma, ml, int(rng.integers(2, 5)))):
+    # Hour hand is clearly shorter than the minute hand, but by a varying ratio (real watches differ);
+    # width varies too, and sometimes the hour hand is not the thicker one.
+    ml = r * rng.uniform(0.68, 0.9)
+    hl = ml * rng.uniform(0.5, 0.78)
+    hw, mw = int(rng.integers(3, 9)), int(rng.integers(2, 6))
+    for ang, ln, w in ((ha, hl, hw), (ma, ml, mw)):
         end = (int(c[0] + np.sin(ang) * ln), int(c[1] - np.cos(ang) * ln))
         cv2.line(img, c, end, (ink, ink, ink), w)
+    # Distractor hands that real watches have: a thin long seconds hand and sometimes a coloured
+    # GMT-style hand with a triangle tip. They must not be mistaken for the hour/minute hands.
+    if rng.random() < 0.7:
+        sa = rng.uniform(0, 2 * np.pi)
+        sl = r * rng.uniform(0.75, 0.95)
+        end = (int(c[0] + np.sin(sa) * sl), int(c[1] - np.cos(sa) * sl))
+        cv2.line(img, c, end, (40, 40, 220), 1)
+    if rng.random() < 0.25:
+        ga = rng.uniform(0, 2 * np.pi)
+        gl = r * rng.uniform(0.55, 0.7)
+        end = (int(c[0] + np.sin(ga) * gl), int(c[1] - np.cos(ga) * gl))
+        cv2.line(img, c, end, (30, 30, 200), 2)
+        cv2.circle(img, end, int(r * 0.06), (30, 30, 200), -1)
     img = cv2.GaussianBlur(img, (3, 3), float(rng.uniform(0.1, 1.2)))
     return img
 

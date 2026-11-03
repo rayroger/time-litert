@@ -25,6 +25,7 @@ from clock_common import circular_error_minutes, targets_to_time, time_to_target
 from synthetic import make_synthetic  # noqa: E402
 
 IMG = 224
+CONSISTENCY_WEIGHT = 0.3
 
 
 def load_folder(path):
@@ -63,9 +64,10 @@ def build_models(pretrained):
     aug = tf.keras.Sequential([
         layers.RandomTranslation(0.04, 0.04),
         layers.RandomZoom(0.08),
+        layers.RandomRotation(0.03, fill_mode="reflect"),  # +-11 deg whole-dial tilt: the dial's 12 marker tilts with the hands, so the reading is unchanged
         layers.RandomBrightness(0.25, value_range=(0, 255)),
         layers.RandomContrast(0.25),
-    ], name="augment")  # no rotation/flip: both would change the time shown
+    ], name="augment")  # no flips: a mirrored dial reads a different time
 
     inp = tf.keras.Input((IMG, IMG, 3), name="dial")
     train_model = tf.keras.Model(inp, out(drop(dense(base(aug(inp))))), name="clock_train")
@@ -74,10 +76,48 @@ def build_models(pretrained):
     return train_model, infer_model, base
 
 
+def clock_loss(tf):
+    """MSE on [sin h, cos h, sin m, cos m] plus a consistency term.
+
+    The hour hand's angle is 1/12 of a turn per minute-hand turn, so a valid reading satisfies
+    (hour direction)^12 == minute direction. A model that swaps the two hands, or mistakes the
+    long hand for the short one, breaks this and is penalised; the plain MSE alone treats the
+    two hands independently."""
+    def unit(a, b):  # (re, im) of a 2-vector, normalised
+        n = tf.sqrt(tf.square(a) + tf.square(b)) + 1e-6
+        return a / n, b / n
+
+    def cmul(p, q):
+        return p[0] * q[0] - p[1] * q[1], p[0] * q[1] + p[1] * q[0]
+
+    def loss(y_true, y_pred):
+        mse = tf.reduce_mean(tf.square(y_true - y_pred), axis=-1)
+        zh = unit(y_pred[:, 1], y_pred[:, 0])
+        z2 = cmul(zh, zh)
+        z4 = cmul(z2, z2)
+        z12 = cmul(cmul(z4, z4), z4)
+        zm = unit(y_pred[:, 3], y_pred[:, 2])
+        cons = tf.square(z12[0] - zm[0]) + tf.square(z12[1] - zm[1])
+        return mse + CONSISTENCY_WEIGHT * cons
+    return loss
+
+
+def hand_diagnostics(pred, minutes):
+    """How the big misses (> 30 min) look: is the hour-hand output following the true minute hand?"""
+    err = circular_error_minutes(targets_to_time(pred), minutes)
+    big = err > 30
+    true = time_to_targets(minutes)
+    hour_pred = np.rad2deg(np.arctan2(pred[:, 0], pred[:, 1]))
+    min_true = np.rad2deg(np.arctan2(true[:, 2], true[:, 3]))
+    d = np.abs((hour_pred - min_true + 180) % 360 - 180)
+    return {"big_miss_fraction": float(big.mean()),
+            "big_misses_hour_output_follows_minute_hand": float((d[big] < 25).mean()) if big.any() else 0.0}
+
+
 def score(infer_model, x, minutes):
     pred = infer_model.predict(x.astype("float32"), batch_size=64, verbose=0)
     err = circular_error_minutes(targets_to_time(pred), minutes)
-    return {"n": int(len(err)), "mean_abs_error_min": float(err.mean()), "median_error_min": float(np.median(err)),
+    return {**hand_diagnostics(pred, minutes), "n": int(len(err)), "mean_abs_error_min": float(err.mean()), "median_error_min": float(np.median(err)),
             "p90_error_min": float(np.percentile(err, 90)), "within_5_min": float((err <= 5).mean()),
             "within_1_min": float((err <= 1).mean())}
 
@@ -129,7 +169,7 @@ def main():
 
     def fit(epochs, lr, trainable):
         base.trainable = trainable
-        train_model.compile(tf.keras.optimizers.Adam(lr), loss="mse")
+        train_model.compile(tf.keras.optimizers.Adam(lr), loss=clock_loss(tf))
         h = train_model.fit(xt.astype("float32"), yt, validation_data=(xv.astype("float32"), yv),
                             epochs=epochs, batch_size=args.batch, verbose=2)
         for k, v in h.history.items():
