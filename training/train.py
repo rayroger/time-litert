@@ -25,7 +25,7 @@ from clock_common import circular_error_minutes, targets_to_time, time_to_target
 from synthetic import make_synthetic  # noqa: E402
 
 IMG = 224
-CONSISTENCY_WEIGHT = 0.3
+CONSISTENCY_WEIGHT = 0.0  # default off: 0.3 made training diverge (the x12 amplifies gradients); see --consistency
 
 
 def load_folder(path):
@@ -75,7 +75,7 @@ def build_models(pretrained):
     return train_model, infer_model, base
 
 
-def clock_loss(tf):
+def clock_loss(tf, weight):
     """MSE on [sin h, cos h, sin m, cos m] plus a consistency term.
 
     The hour hand's angle is 1/12 of a turn per minute-hand turn, so a valid reading satisfies
@@ -83,7 +83,7 @@ def clock_loss(tf):
     long hand for the short one, breaks this and is penalised; the plain MSE alone treats the
     two hands independently."""
     def unit(a, b):  # (re, im) of a 2-vector, normalised
-        n = tf.sqrt(tf.square(a) + tf.square(b)) + 1e-6
+        n = tf.stop_gradient(tf.sqrt(tf.square(a) + tf.square(b)) + 1e-3)  # no gradient through the norm: it explodes near 0
         return a / n, b / n
 
     def cmul(p, q):
@@ -97,7 +97,7 @@ def clock_loss(tf):
         z12 = cmul(cmul(z4, z4), z4)
         zm = unit(y_pred[:, 3], y_pred[:, 2])
         cons = tf.square(z12[0] - zm[0]) + tf.square(z12[1] - zm[1])
-        return mse + CONSISTENCY_WEIGHT * cons
+        return mse + weight * cons
     return loss
 
 
@@ -129,6 +129,8 @@ def main():
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--no-pretrained", action="store_true")
+    ap.add_argument("--consistency", type=float, default=CONSISTENCY_WEIGHT,
+                    help="weight of the hour/minute hand consistency loss (0 = plain MSE)")
     ap.add_argument("--init-weights", help="clock.weights.h5 from an earlier run: continue training from it "
                     "(fine-tune on new data) instead of starting from ImageNet")
     ap.add_argument("--out", default="out")
@@ -168,7 +170,7 @@ def main():
 
     def fit(epochs, lr, trainable):
         base.trainable = trainable
-        train_model.compile(tf.keras.optimizers.Adam(lr), loss=clock_loss(tf))
+        train_model.compile(tf.keras.optimizers.Adam(lr), loss=clock_loss(tf, args.consistency))
         h = train_model.fit(xt.astype("float32"), yt, validation_data=(xv.astype("float32"), yv),
                             epochs=epochs, batch_size=args.batch, verbose=2)
         for k, v in h.history.items():
