@@ -27,6 +27,10 @@ on:
         description: "Extra synthetic clocks added to the training set"
         required: false
         default: "0"
+      consistency:
+        description: "Weight of the hour/minute consistency loss (0 = plain MSE)"
+        required: false
+        default: "0"
       init_weights_url:
         description: "URL of clock.weights.h5 from an earlier run: continue training from it (empty = start fresh)"
         required: false
@@ -64,7 +68,7 @@ jobs:
           INIT=""; [ -f init.weights.h5 ] && INIT="--init-weights init.weights.h5"
           if [ -f dataset.zip ]; then
             python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
-              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} $INIT --out out
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --consistency ${{ inputs.consistency || '0' }} $INIT --out out
           else
             FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
             python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
