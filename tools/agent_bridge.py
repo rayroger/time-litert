@@ -58,7 +58,7 @@ ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 TAG_RE = re.compile(r"^(dataset|model)-[A-Za-z0-9._-]{1,40}$")
 ASSET_SUFFIXES = (".zip", ".json", ".csv", ".tflite")
 KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
-VERSION = "4"
+VERSION = "5"
 
 
 class BridgeError(Exception):
@@ -83,6 +83,7 @@ class Bridge:
     def __init__(self, root, adb):
         self.root = Path(root)
         self.adb = adb
+        self.finished = set()  # job files already processed but not yet moved to done/
         self.data_dir = None  # FTP server data folder (--data), needed for delete_sessions
         self.api_base = "https://api.github.com"
         self.upload_base = "https://uploads.github.com"
@@ -121,14 +122,27 @@ class Bridge:
         if rc != 0 or "device" not in out:
             raise BridgeError(f"no phone available over adb: {out}")
 
-    def write_json(self, path, data):
+    def write_json(self, path, data, attempts=10):
+        """Atomic write. On Windows os.replace raises PermissionError while another process (the
+        agent reading the file, antivirus, the indexer) has the target open, so retry for a while."""
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        for i in range(attempts):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if i == attempts - 1:
+                    raise
+                time.sleep(0.2 * (i + 1))
 
     def heartbeat(self, state="idle", job=None):
-        self.write_json(self.root / "heartbeat.json",
-                        {"time": now(), "state": state, "job": job, "bridge_version": VERSION})
+        # The heartbeat is a convenience: never let a failed write take the bridge down.
+        try:
+            self.write_json(self.root / "heartbeat.json",
+                            {"time": now(), "state": state, "job": job, "bridge_version": VERSION})
+        except OSError as e:
+            print(f"heartbeat not written ({e}); continuing")
 
     # ---- actions -------------------------------------------------------------------------
     def a_ping(self, params, job_id):
@@ -206,8 +220,11 @@ class Bridge:
         deadline = time.time() + duration + settle
         while time.time() < deadline:
             self.heartbeat("run_session", job_id)
-            self.write_json(self.results / f"{job_id}.running.json",
-                            {"started": started, "ends_about": datetime.fromtimestamp(deadline).astimezone().isoformat(timespec="seconds")})
+            try:
+                self.write_json(self.results / f"{job_id}.running.json",
+                                {"started": started, "ends_about": datetime.fromtimestamp(deadline).astimezone().isoformat(timespec="seconds")})
+            except OSError:
+                pass
             time.sleep(min(5, max(0.0, deadline - time.time())))
         (self.results / f"{job_id}.running.json").unlink(missing_ok=True)
         rc, listing = self.adb_run("shell", "ls", PHONE_PICTURES)
@@ -376,19 +393,40 @@ class Bridge:
         except Exception as e:  # report any failure to the agent instead of crashing the bridge
             result = {"status": "error", "action": action, "error": f"{type(e).__name__}: {e}"}
         result.update({"id": job_id, "started": started, "finished": now()})
-        self.write_json(self.results / f"{job_id}.json", result)
+        try:
+            self.write_json(self.results / f"{job_id}.json", result, attempts=30)
+        except OSError as e:
+            print(f"could not write result of {job_id}: {e}")
         return job_path
+
+    def archive_finished(self):
+        """Moves processed job files to done/; a locked file is retried on the next loop."""
+        for name in sorted(self.finished):
+            src = self.jobs / name
+            if not src.exists():
+                self.finished.discard(name)
+                continue
+            try:
+                shutil.move(str(src), str(self.done / name))
+                self.finished.discard(name)
+            except OSError as e:
+                print(f"could not move {name} to done ({e}); will retry")
 
     def run(self, once=False):
         print(f"agent bridge running. folder: {self.root}  adb: {self.adb}")
         while True:
-            self.heartbeat()
-            pending = sorted(p for p in self.jobs.glob("*.json") if time.time() - p.stat().st_mtime > 2)
-            for job_path in pending:
-                done = self.process(job_path)
-                shutil.move(str(done), str(self.done / done.name))
-            if once and not pending:
-                return
+            try:
+                self.heartbeat()
+                self.archive_finished()
+                pending = sorted(p for p in self.jobs.glob("*.json")
+                                 if p.name not in self.finished and time.time() - p.stat().st_mtime > 2)
+                for job_path in pending:
+                    self.finished.add(self.process(job_path).name)  # never run a job twice
+                    self.archive_finished()
+                if once and not pending:
+                    return
+            except OSError as e:  # a file held open by another program: wait and try again
+                print(f"file access problem ({e}); retrying")
             time.sleep(2)
 
 
