@@ -31,6 +31,10 @@ on:
         description: "Weight of the hour/minute consistency loss (0 = plain MSE)"
         required: false
         default: "0"
+      cond_hour:
+        description: "Predict the hour hand conditioned on the minute reading (true/false)"
+        required: false
+        default: "false"
       init_weights_url:
         description: "URL of clock.weights.h5 from an earlier run: continue training from it (empty = start fresh)"
         required: false
@@ -66,12 +70,15 @@ jobs:
       - name: Train
         run: |
           INIT=""; [ -f init.weights.h5 ] && INIT="--init-weights init.weights.h5"
+          COND=""; [ "${{ inputs.cond_hour }}" = "true" ] && COND="--cond-hour"
           if [ -f dataset.zip ]; then
             python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
-              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --consistency ${{ inputs.consistency || '0' }} $INIT --out out
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --consistency ${{ inputs.consistency || '0' }} $COND $INIT --out out
           else
             FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
             python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
+            # smoke-test the conditional hour head too
+            python training/train.py --synthetic 200 --epochs 1 $FLAGS --cond-hour --out out3
             # smoke-test the continue-from-weights path too
             python training/train.py --synthetic 200 --epochs 1 $FLAGS --init-weights out/clock.weights.h5 --out out2
           fi
