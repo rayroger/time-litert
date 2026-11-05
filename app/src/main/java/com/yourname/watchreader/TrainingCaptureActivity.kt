@@ -12,6 +12,11 @@ import android.graphics.RectF
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -88,6 +93,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val CAMERA_READY_TIMEOUT_MS = 15_000L
         private const val LIVE_INTERVAL_MS = 700L
         private const val LIVE_MAX_SIDE = 1280
+        /** While capturing, the screen dims to its minimum after this long without a touch. */
+        private const val IDLE_DIM_AFTER_MS = 2 * 60 * 1000L
+        private const val DIM_BRIGHTNESS = 0.01f
     }
 
     private lateinit var previewView: PreviewView
@@ -107,6 +115,14 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     /** The detector is not thread-safe: the live preview and the capture loop take turns. */
     private val detectorMutex = Mutex()
+
+    // Power saving: while a session runs and nobody touches the phone, the screen is dimmed to its
+    // minimum behind a black cover and live detection is paused. The camera and the scheduled
+    // captures keep running (turning the screen fully off would stop the camera). Any touch wakes it.
+    private val idleHandler = Handler(Looper.getMainLooper())
+    private val dimRunnable = Runnable { enterDim() }
+    private var dimmed = false
+    private var dimCover: TextView? = null
 
     private var imageCapture: ImageCapture? = null
     private var cameraControl: CameraControl? = null
@@ -186,6 +202,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
         observeUploads()
         startLiveDetection()
+        installDimCover()
 
         // Keep the screen awake so unattended sessions are not interrupted by the lock screen.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -291,11 +308,60 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 delay(intervalSeconds * 1000)
             }
         }
+        scheduleDim()
+    }
+
+    // ---- idle dimming ----------------------------------------------------------------------
+    private fun installDimCover() {
+        val cover = TextView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            setTextColor(Color.DKGRAY)
+            gravity = Gravity.CENTER
+            textSize = 16f
+            text = getString(R.string.dim_touch_to_wake)
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { wakeFromDim() }
+        }
+        (findViewById<ViewGroup>(android.R.id.content)).addView(
+            cover, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        dimCover = cover
+    }
+
+    private fun scheduleDim() {
+        idleHandler.removeCallbacks(dimRunnable)
+        if (captureLoopJob?.isActive == true) idleHandler.postDelayed(dimRunnable, IDLE_DIM_AFTER_MS)
+    }
+
+    private fun enterDim() {
+        if (captureLoopJob?.isActive != true) return
+        dimmed = true
+        dimCover?.visibility = View.VISIBLE
+        window.attributes = window.attributes.also { it.screenBrightness = DIM_BRIGHTNESS }
+    }
+
+    private fun wakeFromDim() {
+        if (dimmed) {
+            dimmed = false
+            dimCover?.visibility = View.GONE
+            window.attributes = window.attributes.also {
+                it.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+        scheduleDim()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        wakeFromDim()
     }
 
     private fun stopCaptureLoop() {
         captureLoopJob?.cancel()
         captureLoopJob = null
+        idleHandler.removeCallbacks(dimRunnable)
+        wakeFromDim()
 
         startButton.visibility = View.VISIBLE
         stopButton.visibility = View.GONE
@@ -430,6 +496,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (isActive) {
                 delay(LIVE_INTERVAL_MS)
+                if (dimmed) continue // screen is dimmed: skip the live detection work
                 val detector = watchDetector ?: continue
                 if (imageCapture == null || previewView.width == 0) continue
                 val frame = previewView.bitmap ?: continue
@@ -698,6 +765,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        idleHandler.removeCallbacks(dimRunnable)
         captureLoopJob?.cancel()
         cameraControl = null
         imageCapture = null
