@@ -130,6 +130,18 @@ def hand_diagnostics(pred, minutes):
             "big_misses_hour_output_follows_minute_hand": float((d[big] < 25).mean()) if big.any() else 0.0}
 
 
+def swap_fix(pred):
+    """Inference-time check: keep the hand assignment (as predicted, or hour/minute outputs swapped)
+    whose hour and minute angles agree better with the 12:1 relation. Returns the chosen predictions."""
+    def resid(p):
+        h = np.arctan2(p[:, 0], p[:, 1])
+        m = np.arctan2(p[:, 2], p[:, 3])
+        return np.abs((12 * h - m + np.pi) % (2 * np.pi) - np.pi)
+    sw = pred[:, [2, 3, 0, 1]]
+    use = resid(sw) < resid(pred)
+    return np.where(use[:, None], sw, pred), float(use.mean())
+
+
 def breakdown(pred, minutes, dials):
     """Where the errors are: per frame position, per minute-of-hour zone, per hour, and what kind of
     big miss it is (hour wrong but minute right, versus the minute reading itself wrong)."""
@@ -162,6 +174,11 @@ def score(infer_model, x, minutes, dials=None):
     pred = infer_model.predict(x.astype("float32"), batch_size=64, verbose=0)
     err = circular_error_minutes(targets_to_time(pred), minutes)
     extra = {"breakdown": breakdown(pred, minutes, dials)} if dials is not None else {}
+    fixed, swapped = swap_fix(pred)
+    ferr = circular_error_minutes(targets_to_time(fixed), minutes)
+    extra["swap_fix"] = {"swapped_fraction": swapped, "mean_abs_error_min": float(ferr.mean()),
+                         "median_error_min": float(np.median(ferr)), "within_5_min": float((ferr <= 5).mean()),
+                         "big_miss_fraction": float((ferr > 30).mean())}
     return {**extra, **hand_diagnostics(pred, minutes), "n": int(len(err)), "mean_abs_error_min": float(err.mean()), "median_error_min": float(np.median(err)),
             "p90_error_min": float(np.percentile(err, 90)), "within_5_min": float((err <= 5).mean()),
             "within_1_min": float((err <= 1).mean())}
