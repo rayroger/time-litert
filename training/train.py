@@ -38,6 +38,7 @@ def load_folder(path):
         path = out
     xs = {"train": [], "validation": []}
     ys = {"train": [], "validation": []}
+    dials = {"train": [], "validation": []}
     with open(path / "labels.csv", newline="") as f:
         for row in csv.DictReader(f):
             img = cv2.imread(str(path / "images" / row["file"]))
@@ -47,11 +48,14 @@ def load_folder(path):
             split = "validation" if row["split"] == "validation" else "train"
             xs[split].append(img)
             ys[split].append(float(row["minutes_12h"]))
+            # watch id is "<session>_d<N>": N is the left-to-right position in the frame
+            dials[split].append(int(row.get("watch", "_d0").rsplit("_d", 1)[-1] or 0))
     return ({k: np.array(v, dtype=np.uint8) for k, v in xs.items()},
-            {k: np.array(v, dtype=np.float64) for k, v in ys.items()})
+            {k: np.array(v, dtype=np.float64) for k, v in ys.items()},
+            {k: np.array(v, dtype=int) for k, v in dials.items()})
 
 
-def build_models(pretrained):
+def build_models(pretrained, cond_hour=False):
     import tensorflow as tf
     from tensorflow.keras import layers
 
@@ -60,7 +64,20 @@ def build_models(pretrained):
         weights="imagenet" if pretrained else None, include_preprocessing=True)
     dense = layers.Dense(128, activation="relu")
     drop = layers.Dropout(0.2)
-    out = layers.Dense(4)
+    if cond_hour:
+        # Read the minute hand first, then predict the hour hand knowing that reading: the hour
+        # hand's position is the hour mark plus minute/2 degrees, so the minute narrows it down.
+        out_m, out_h = layers.Dense(2), layers.Dense(2)
+
+        def head(f):
+            m = out_m(f)
+            h = out_h(layers.Concatenate()([f, m]))
+            return layers.Concatenate()([h, m])  # [sin h, cos h, sin m, cos m]
+    else:
+        out = layers.Dense(4)
+
+        def head(f):
+            return out(f)
     aug = tf.keras.Sequential([
         layers.RandomTranslation(0.04, 0.04),
         layers.RandomZoom(0.08),
@@ -69,9 +86,9 @@ def build_models(pretrained):
     ], name="augment")  # no rotation/flip: the targets are hand angles in the image frame (12 at the top), so either would make the labels wrong
 
     inp = tf.keras.Input((IMG, IMG, 3), name="dial")
-    train_model = tf.keras.Model(inp, out(drop(dense(base(aug(inp))))), name="clock_train")
+    train_model = tf.keras.Model(inp, head(drop(dense(base(aug(inp))))), name="clock_train")
     inp2 = tf.keras.Input((IMG, IMG, 3), name="dial")
-    infer_model = tf.keras.Model(inp2, out(dense(base(inp2))), name="clock_infer")
+    infer_model = tf.keras.Model(inp2, head(dense(base(inp2))), name="clock_infer")
     return train_model, infer_model, base
 
 
@@ -113,10 +130,39 @@ def hand_diagnostics(pred, minutes):
             "big_misses_hour_output_follows_minute_hand": float((d[big] < 25).mean()) if big.any() else 0.0}
 
 
-def score(infer_model, x, minutes):
+def breakdown(pred, minutes, dials):
+    """Where the errors are: per frame position, per minute-of-hour zone, per hour, and what kind of
+    big miss it is (hour wrong but minute right, versus the minute reading itself wrong)."""
+    err = circular_error_minutes(targets_to_time(pred), minutes)
+    minute_err = circular_error_minutes(targets_to_time(pred) % 60.0, minutes % 60.0)
+    mod = np.asarray(minutes) % 60.0
+
+    def stats(mask):
+        n = int(mask.sum())
+        if n == 0:
+            return {"n": 0}
+        e = err[mask]
+        return {"n": n, "mean": round(float(e.mean()), 1), "median": round(float(np.median(e)), 2),
+                "big": round(float((e > 30).mean()), 3)}
+
+    big = err > 30
+    out = {"by_dial_position": {str(d): stats(dials == d) for d in sorted(set(dials.tolist()))},
+           "by_minute_zone": {"near_hour_mark(<3|>57)": stats((mod < 3) | (mod > 57)),
+                              "near_half(27-33)": stats((mod > 27) & (mod < 33)),
+                              "elsewhere": stats(~((mod < 3) | (mod > 57)) & ~((mod > 27) & (mod < 33)))},
+           "by_hour": {str(h): stats((np.asarray(minutes) // 60).astype(int) == h) for h in range(12)}}
+    if big.any():
+        out["big_miss_kinds"] = {
+            "hour_wrong_minute_right": round(float((minute_err[big] < 5).mean()), 3),
+            "minute_reading_wrong": round(float((minute_err[big] >= 5).mean()), 3)}
+    return out
+
+
+def score(infer_model, x, minutes, dials=None):
     pred = infer_model.predict(x.astype("float32"), batch_size=64, verbose=0)
     err = circular_error_minutes(targets_to_time(pred), minutes)
-    return {**hand_diagnostics(pred, minutes), "n": int(len(err)), "mean_abs_error_min": float(err.mean()), "median_error_min": float(np.median(err)),
+    extra = {"breakdown": breakdown(pred, minutes, dials)} if dials is not None else {}
+    return {**extra, **hand_diagnostics(pred, minutes), "n": int(len(err)), "mean_abs_error_min": float(err.mean()), "median_error_min": float(np.median(err)),
             "p90_error_min": float(np.percentile(err, 90)), "within_5_min": float((err <= 5).mean()),
             "within_1_min": float((err <= 1).mean())}
 
@@ -131,6 +177,8 @@ def main():
     ap.add_argument("--no-pretrained", action="store_true")
     ap.add_argument("--consistency", type=float, default=CONSISTENCY_WEIGHT,
                     help="weight of the hour/minute hand consistency loss (0 = plain MSE)")
+    ap.add_argument("--cond-hour", action="store_true",
+                    help="predict the hour hand conditioned on the minute-hand reading")
     ap.add_argument("--init-weights", help="clock.weights.h5 from an earlier run: continue training from it "
                     "(fine-tune on new data) instead of starting from ImageNet")
     ap.add_argument("--out", default="out")
@@ -145,12 +193,14 @@ def main():
         n_val = max(50, args.synthetic // 5)
         xt, tt = make_synthetic(args.synthetic, seed=1)
         xv, tv = make_synthetic(n_val, seed=2)
+        dv = np.zeros(len(xv), dtype=int)
         data_info = {"source": "synthetic"}
     else:
         if not args.data:
             sys.exit("pass --data or --synthetic")
-        xs, ys = load_folder(args.data)
+        xs, ys, dials = load_folder(args.data)
         xt, tt, xv, tv = xs["train"], ys["train"], xs["validation"], ys["validation"]
+        dv = dials["validation"]
         data_info = {"source": args.data}
     if args.synthetic_extra:
         xe, te = make_synthetic(args.synthetic_extra, seed=3)
@@ -160,7 +210,7 @@ def main():
     data_info.update({"train": int(len(xt)), "validation": int(len(xv))})
     print("data:", data_info, flush=True)
 
-    train_model, infer_model, base = build_models(pretrained=not args.no_pretrained)
+    train_model, infer_model, base = build_models(pretrained=not args.no_pretrained, cond_hour=args.cond_hour)
     if args.init_weights:
         infer_model.load_weights(args.init_weights)  # layers are shared with train_model
         print("continuing from", args.init_weights, flush=True)
@@ -182,7 +232,7 @@ def main():
         fit(args.epochs - frozen, 2e-4, True)
 
     metrics = {"data": data_info, "epochs": args.epochs,
-               "validation": score(infer_model, xv, tv), "train": score(infer_model, xt[:1000], tt[:1000])}
+               "validation": score(infer_model, xv, tv, dv), "train": score(infer_model, xt[:1000], tt[:1000])}
 
     converter = tf.lite.TFLiteConverter.from_keras_model(infer_model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
