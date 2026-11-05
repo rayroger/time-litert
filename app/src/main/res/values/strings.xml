@@ -49,4 +49,5 @@
     <string name="action_settings">Settings</string>
     <string name="capture_start">Start capture</string>
     <string name="capture_stop">Stop capture</string>
+    <string name="dim_touch_to_wake">Capturing — touch to wake the screen</string>
 </resources>
