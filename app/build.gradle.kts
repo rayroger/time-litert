@@ -80,5 +80,7 @@ dependencies {
         exclude("org.tensorflow", "tensorflow-lite-api")
     }
     implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    // Runtime for the trained clock-reading model (assets/clock_reader.tflite).
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
 
 }

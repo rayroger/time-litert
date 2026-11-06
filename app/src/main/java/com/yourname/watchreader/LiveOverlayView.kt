@@ -9,7 +9,7 @@ import android.util.AttributeSet
 import android.view.View
 
 /** One watch box in view coordinates with the number shown next to it (same as dial_index). */
-data class LiveBox(val rect: RectF, val number: Int, val score: Float)
+data class LiveBox(val rect: RectF, val number: Int, val score: Float, val reading: String? = null)
 
 /** Draws the live detection boxes over the camera preview. */
 class LiveOverlayView @JvmOverloads constructor(
@@ -44,7 +44,7 @@ class LiveOverlayView @JvmOverloads constructor(
         super.onDraw(canvas)
         for (b in boxes) {
             canvas.drawRect(b.rect, boxPaint)
-            val label = "${b.number}  %.0f%%".format(b.score * 100)
+            val label = if (b.reading != null) "${b.number}  ${b.reading}" else "${b.number}  %.0f%%".format(b.score * 100)
             val w = textPaint.measureText(label) + 20f
             val top = (b.rect.top - 52f).coerceAtLeast(0f)
             canvas.drawRect(b.rect.left, top, b.rect.left + w, top + 52f, tagPaint)
