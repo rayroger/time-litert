@@ -370,6 +370,20 @@ class TrainingCaptureActivity : AppCompatActivity() {
         statusText.text = getString(R.string.training_status_stopped, captureCount, watchCount)
     }
 
+    /** (battery percent, charging) from the sticky battery broadcast; (null, null) if unavailable. */
+    private fun batteryState(): Pair<Int?, Boolean?> = try {
+        val i = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val level = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val status = i?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val pct = if (level >= 0 && scale > 0) level * 100 / scale else null
+        val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_FULL
+        Pair(pct, charging)
+    } catch (e: Exception) {
+        Pair(null, null)
+    }
+
     private suspend fun captureOnce() {
         val capture = imageCapture ?: return
 
@@ -439,6 +453,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 }
 
                 val captureMillis = System.currentTimeMillis()
+                val battery = batteryState()
                 found.forEachIndexed { i, d ->
                     val (crop, cropRect) = cropWatch(bitmap, d.box) ?: return@forEachIndexed
                     try {
@@ -462,7 +477,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
                                 detectionScore = d.score,
                                 detectionCategory = d.category,
                                 modelName = WatchDetector.MODEL_NAME,
-                                modelVersion = appVersionName()
+                                modelVersion = appVersionName(),
+                                batteryPercent = battery.first,
+                                charging = battery.second
                             ),
                             timestamp,
                             "capture_${index}_watch_${i + 1}.json"

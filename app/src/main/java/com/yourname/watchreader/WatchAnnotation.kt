@@ -58,7 +58,10 @@ data class WatchAnnotation(
     val hands: HandAnnotation = HandAnnotation(),
     /** `auto` for machine-generated labels, `manual` once a human has set/corrected them. */
     val labelSource: String = LABEL_SOURCE_AUTO,
-    val verified: Boolean = false
+    val verified: Boolean = false,
+    /** Phone battery at capture time (to explain a stopped run later); null when unknown. */
+    val batteryPercent: Int? = null,
+    val charging: Boolean? = null
 ) {
     fun toJson(): JSONObject {
         fun opt(v: Any?): Any = v ?: JSONObject.NULL
@@ -105,7 +108,9 @@ data class WatchAnnotation(
             .put("device", JSONObject()
                 .put("manufacturer", Build.MANUFACTURER)
                 .put("model", Build.MODEL)
-                .put("android_sdk", Build.VERSION.SDK_INT))
+                .put("android_sdk", Build.VERSION.SDK_INT)
+                .put("battery_percent", opt(batteryPercent))
+                .put("charging", opt(charging)))
             .put("label_source", labelSource)
             .put("verified", verified)
     }
