@@ -93,6 +93,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val CAMERA_READY_TIMEOUT_MS = 15_000L
         private const val LIVE_INTERVAL_MS = 700L
         private const val LIVE_MAX_SIDE = 1280
+        /** Focus on each watch in turn and take one photo per watch. */
+        private const val PER_WATCH_FOCUS = true
+        private const val FOCUS_SETTLE_MS = 500L
         /** While capturing, the screen dims to its minimum after this long without a touch. */
         private const val IDLE_DIM_AFTER_MS = 2 * 60 * 1000L
         private const val DIM_BRIGHTNESS = 0.01f
@@ -388,19 +391,82 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     private suspend fun captureOnce() {
         val capture = imageCapture ?: return
+        val index = captureCount + 1
 
-        cameraControl?.focusAndMeterAtCenter(previewView)
-        if (imageCapture !== capture) return
-
-        val bitmap = try {
-            takePictureSuspend(capture)
-        } catch (e: ImageCaptureException) {
-            Log.e(TAG, "Photo capture failed: ${e.message}", e)
-            statusText.text = getString(R.string.error_template, e.message)
+        // Focus on every watch in turn (like tapping each one on the screen) and take one photo per
+        // watch, so the outer watches are sharp too. Falls back to a single centre-focused photo.
+        val targets = if (PER_WATCH_FOCUS) detectViewBoxes() else emptyList()
+        if (targets.isEmpty()) {
+            cameraControl?.focusAndMeterAtCenter(previewView)
+            if (imageCapture !== capture) return
+            val bitmap = try {
+                takePictureSuspend(capture)
+            } catch (e: ImageCaptureException) {
+                Log.e(TAG, "Photo capture failed: ${e.message}", e)
+                statusText.text = getString(R.string.error_template, e.message)
+                return
+            }
+            finishCapture(index, processCapturedBitmap(bitmap, index, null))
             return
         }
 
-        processCapturedBitmap(bitmap)
+        var saved = 0
+        for ((i, box) in targets.withIndex()) {
+            if (imageCapture !== capture) return
+            cameraControl?.focusAndMeterAt(previewView, box.centerX(), box.centerY())
+            delay(FOCUS_SETTLE_MS)
+            val bitmap = try {
+                takePictureSuspend(capture)
+            } catch (e: ImageCaptureException) {
+                Log.e(TAG, "Photo capture failed: ${e.message}", e)
+                continue
+            }
+            saved += processCapturedBitmap(bitmap, index, i + 1)
+        }
+        finishCapture(index, saved)
+    }
+
+    private fun finishCapture(index: Int, crops: Int) {
+        val timestamp = sessionTimestamp ?: return
+        captureCount = index
+        watchCount += crops
+        statusText.text = getString(R.string.training_status_running, captureCount, watchCount) +
+            "\n" + getString(
+                R.string.training_save_location,
+                "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$timestamp"
+            )
+    }
+
+    /** Watch boxes (preview view coordinates, left to right) found in the current preview frame. */
+    private suspend fun detectViewBoxes(): List<RectF> {
+        val detector = watchDetector ?: return emptyList()
+        if (previewView.width == 0) return emptyList()
+        val frame = previewView.bitmap ?: return emptyList()
+        return try {
+            withContext(Dispatchers.IO) {
+                detectorMutex.withLock {
+                    val longSide = maxOf(frame.width, frame.height)
+                    val small = if (longSide > LIVE_MAX_SIDE) {
+                        val f = LIVE_MAX_SIDE.toFloat() / longSide
+                        Bitmap.createScaledBitmap(frame, (frame.width * f).toInt(), (frame.height * f).toInt(), true)
+                    } else frame
+                    try {
+                        val sx = previewView.width.toFloat() / small.width
+                        val sy = previewView.height.toFloat() / small.height
+                        detector.detect(small)
+                            .sortedWith(compareBy({ it.box.centerX() }, { it.box.centerY() }))
+                            .map { RectF(it.box.left * sx, it.box.top * sy, it.box.right * sx, it.box.bottom * sy) }
+                    } finally {
+                        if (small !== frame) small.recycle()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Preview detection failed: ${e.message}")
+            emptyList()
+        } finally {
+            frame.recycle()
+        }
     }
 
     private suspend fun takePictureSuspend(capture: ImageCapture): Bitmap =
@@ -421,10 +487,12 @@ class TrainingCaptureActivity : AppCompatActivity() {
             )
         }
 
-    private suspend fun processCapturedBitmap(bitmap: Bitmap) {
+    /** Detects, saves the annotated photo and the crops (only dial [onlyDial] when set); returns how many crops were saved. */
+    private suspend fun processCapturedBitmap(bitmap: Bitmap, index: Int, onlyDial: Int?): Int {
         val detector = watchDetector
         val timestamp = sessionTimestamp ?: createSessionTimestamp().also { sessionTimestamp = it }
-        val index = captureCount + 1
+        val annotatedName = if (onlyDial == null) "capture_${index}_annotated.jpg" else "capture_${index}_annotated_w$onlyDial.jpg"
+        var savedCrops = 0
 
         val detections: List<WatchDetection> = withContext(Dispatchers.IO) {
             try {
@@ -449,7 +517,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                             labelPaint
                         )
                     }
-                    saveBitmap(annotated, timestamp, "capture_${index}_annotated.jpg")
+                    saveBitmap(annotated, timestamp, annotatedName)
                 } finally {
                     annotated.recycle()
                 }
@@ -457,6 +525,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 val captureMillis = System.currentTimeMillis()
                 val battery = batteryState()
                 found.forEachIndexed { i, d ->
+                    if (onlyDial != null && i + 1 != onlyDial) return@forEachIndexed
                     val (crop, cropRect) = cropWatch(bitmap, d.box) ?: return@forEachIndexed
                     try {
                         val imageName = "capture_${index}_watch_${i + 1}.jpg"
@@ -471,7 +540,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                                 session = timestamp,
                                 captureIndex = index,
                                 dialIndex = i + 1,
-                                sourceImageFilename = "capture_${index}_annotated.jpg",
+                                sourceImageFilename = annotatedName,
                                 sourceImageWidth = bitmap.width,
                                 sourceImageHeight = bitmap.height,
                                 dialBoxSource = BoxPx(cropRect.left.toFloat(), cropRect.top.toFloat(), cropRect.right.toFloat(), cropRect.bottom.toFloat()),
@@ -486,6 +555,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                             timestamp,
                             "capture_${index}_watch_${i + 1}.json"
                         )
+                        savedCrops++
                     } finally {
                         crop.recycle()
                     }
@@ -496,14 +566,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
             }
         }
 
-        captureCount = index
-        watchCount += detections.size
-
-        statusText.text = getString(R.string.training_status_running, captureCount, watchCount) +
-            "\n" + getString(
-                R.string.training_save_location,
-                "${Environment.DIRECTORY_PICTURES}/$TRAINING_DATA_DIR/$timestamp"
-            )
+        return savedCrops
     }
 
     /**

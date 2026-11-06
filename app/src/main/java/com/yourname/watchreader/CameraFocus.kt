@@ -25,15 +25,16 @@ private const val FOCUS_TIMEOUT_MILLIS = 6_000L
  * times out or fails. Caller cancellation is propagated.
  */
 suspend fun CameraControl.focusAndMeterAtCenter(previewView: PreviewView): Boolean =
+    focusAndMeterAt(previewView, previewView.width / 2f, previewView.height / 2f)
+
+/** Same as [focusAndMeterAtCenter] for a point given in the preview view's pixel coordinates (like a screen tap). */
+suspend fun CameraControl.focusAndMeterAt(previewView: PreviewView, x: Float, y: Float): Boolean =
     withContext(Dispatchers.Main.immediate) {
         if (previewView.width == 0 || previewView.height == 0) return@withContext false
 
         try {
             val focusSucceeded = withTimeoutOrNull(FOCUS_TIMEOUT_MILLIS) {
-                val point = previewView.meteringPointFactory.createPoint(
-                    previewView.width / 2f,
-                    previewView.height / 2f
-                )
+                val point = previewView.meteringPointFactory.createPoint(x, y)
                 val future = startFocusAndMetering(FocusMeteringAction.Builder(point).build())
 
                 suspendCancellableCoroutine { continuation ->
