@@ -58,7 +58,7 @@ ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 TAG_RE = re.compile(r"^(dataset|model)-[A-Za-z0-9._-]{1,40}$")
 ASSET_SUFFIXES = (".zip", ".json", ".csv", ".tflite")
 KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
-VERSION = "5"
+VERSION = "6"
 
 
 class BridgeError(Exception):
@@ -218,20 +218,49 @@ class Bridge:
             raise BridgeError(f"could not start the app: {out}")
         started = now()
         deadline = time.time() + duration + settle
+        samples, gaps = [], []
+        last_tick, next_sample = time.time(), 0.0
         while time.time() < deadline:
+            tick = time.time()
+            if tick - last_tick > 30:  # the loop normally ticks every 5 s: a long gap means the PC slept or stalled
+                gaps.append({"at": now(), "seconds": int(tick - last_tick)})
+            last_tick = tick
             self.heartbeat("run_session", job_id)
+            if tick >= next_sample:
+                next_sample = tick + 300
+                samples.append(self.status_sample())
             try:
                 self.write_json(self.results / f"{job_id}.running.json",
-                                {"started": started, "ends_about": datetime.fromtimestamp(deadline).astimezone().isoformat(timespec="seconds")})
+                                {"started": started, "ends_about": datetime.fromtimestamp(deadline).astimezone().isoformat(timespec="seconds"),
+                                 "last_sample": samples[-1] if samples else None, "pc_gaps": gaps})
             except OSError:
                 pass
             time.sleep(min(5, max(0.0, deadline - time.time())))
+        samples.append(self.status_sample())
         (self.results / f"{job_id}.running.json").unlink(missing_ok=True)
         rc, listing = self.adb_run("shell", "ls", PHONE_PICTURES)
         sessions = sorted(s for s in listing.split() if SESSION_RE.match(s))
         return {"started": started, "interval_s": interval, "duration_s": duration,
                 "newest_session_on_phone": sessions[-1] if sessions else None,
+                "status_samples": samples, "pc_gaps": gaps,
                 "log_tail": self.app_log(60)[-3000:]}
+
+    def status_sample(self):
+        """Phone battery, whether the app process is alive and which window has focus (never raises)."""
+        sample = {"time": now()}
+        try:
+            rc, out = self.adb_run("shell", "dumpsys", "battery", timeout=20)
+            for ln in out.splitlines():
+                key, _, val = ln.strip().partition(": ")
+                if key in ("level", "status", "USB powered", "AC powered"):
+                    sample[key] = val
+            rc, out = self.adb_run("shell", "pidof", PKG, timeout=20)
+            sample["app_running"] = bool(out.strip()) and rc == 0
+            rc, out = self.adb_run("shell", "dumpsys", "window", "|", "grep", "mCurrentFocus", timeout=20)
+            sample["focus"] = out.strip()[-120:]
+        except Exception as e:  # noqa: BLE001
+            sample["error"] = str(e)[:120]
+        return sample
 
     def a_screenshot(self, params, job_id):
         self.require_device()
@@ -430,6 +459,17 @@ class Bridge:
             time.sleep(2)
 
 
+def keep_awake():
+    """Ask Windows not to sleep while the bridge runs (a sleeping PC cuts USB power and the FTP server)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+    except Exception as e:  # noqa: BLE001 - best effort only
+        print(f"could not set keep-awake: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bridge", default=str(Path.home() / "agent-bridge"))
@@ -437,6 +477,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="process waiting jobs, then exit (for testing)")
     ap.add_argument("--data", help="FTP server data folder holding the session folders (enables delete_sessions)")
     args = ap.parse_args()
+    keep_awake()
     bridge = Bridge(args.bridge, find_adb(args.adb))
     if args.data:
         bridge.data_dir = Path(args.data)
