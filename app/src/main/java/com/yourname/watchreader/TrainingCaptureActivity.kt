@@ -127,6 +127,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private var cameraControl: CameraControl? = null
     private var watchDetector: WatchDetector? = null
+    private var clockReader: ClockReader? = null
     private var captureLoopJob: Job? = null
     private var sessionTimestamp: String? = null
     private var fileServer: FileServer? = null
@@ -186,6 +187,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
         try {
             watchDetector = WatchDetector(this, maxResults = WatchDetector.MAX_DETECTIONS_PER_CAPTURE)
+            clockReader = ClockReader.create(this)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize detector", e)
             statusText.text = getString(R.string.error_template, e.message)
@@ -536,7 +538,12 @@ class TrainingCaptureActivity : AppCompatActivity() {
                             detector.detect(small)
                                 .sortedWith(compareBy({ it.box.centerX() }, { it.box.centerY() }))
                                 .mapIndexed { i, d ->
-                                    LiveBox(RectF(d.box.left * sx, d.box.top * sy, d.box.right * sx, d.box.bottom * sy), i + 1, d.score)
+                                    val reading = clockReader?.let { r ->
+                                        cropWatch(small, d.box)?.let { (crop, _) ->
+                                            try { r.read(crop) } finally { crop.recycle() }
+                                        }
+                                    }
+                                    LiveBox(RectF(d.box.left * sx, d.box.top * sy, d.box.right * sx, d.box.bottom * sy), i + 1, d.score, reading)
                                 }
                         } finally {
                             if (small !== frame) small.recycle()
@@ -789,5 +796,6 @@ class TrainingCaptureActivity : AppCompatActivity() {
         if (fileServer != null) stopFileServer()
         cameraExecutor.shutdown()
         watchDetector?.close()
+        clockReader?.close()
     }
 }
