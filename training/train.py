@@ -171,7 +171,8 @@ def breakdown(pred, minutes, dials):
 
 
 def score(infer_model, x, minutes, dials=None):
-    pred = infer_model.predict(x.astype("float32"), batch_size=64, verbose=0)
+    pred = np.concatenate([infer_model.predict(x[i:i + 256].astype("float32"), batch_size=64, verbose=0)
+                           for i in range(0, len(x), 256)])
     err = circular_error_minutes(targets_to_time(pred), minutes)
     extra = {"breakdown": breakdown(pred, minutes, dials)} if dials is not None else {}
     fixed, swapped = swap_fix(pred)
@@ -235,11 +236,33 @@ def main():
     yv = time_to_targets(tv).astype("float32")
     history = {}
 
+    class Batches(getattr(tf.keras.utils, "PyDataset", tf.keras.utils.Sequence)):
+        """Converts uint8 images to float32 one batch at a time (a full float32 copy of a large dataset
+        needs several GB more RAM than a CI runner has)."""
+
+        def __init__(self, x, y, shuffle):
+            super().__init__()
+            self.x, self.y, self.shuffle = x, y, shuffle
+            self.order = np.arange(len(x))
+            if shuffle:
+                np.random.shuffle(self.order)
+
+        def __len__(self):
+            return -(-len(self.x) // args.batch)
+
+        def __getitem__(self, i):
+            idx = np.sort(self.order[i * args.batch:(i + 1) * args.batch])
+            return self.x[idx].astype("float32"), self.y[idx]
+
+        def on_epoch_end(self):
+            if self.shuffle:
+                np.random.shuffle(self.order)
+
     def fit(epochs, lr, trainable):
         base.trainable = trainable
         train_model.compile(tf.keras.optimizers.Adam(lr), loss=clock_loss(tf, args.consistency))
-        h = train_model.fit(xt.astype("float32"), yt, validation_data=(xv.astype("float32"), yv),
-                            epochs=epochs, batch_size=args.batch, verbose=2)
+        h = train_model.fit(Batches(xt, yt, True), validation_data=Batches(xv, yv, False),
+                            epochs=epochs, verbose=2)
         for k, v in h.history.items():
             history.setdefault(k, []).extend(float(a) for a in v)
 
