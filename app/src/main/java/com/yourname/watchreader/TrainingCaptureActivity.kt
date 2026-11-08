@@ -98,6 +98,8 @@ class TrainingCaptureActivity : AppCompatActivity() {
         private const val FOCUS_SETTLE_MS = 500L
         /** Max normalized distance between a preview target and its detection in the focused photo. */
         private const val FOCUS_MATCH_MAX_DIST = 0.1f
+        /** Detections closer than this (normalized) are the same watch. */
+        private const val FOCUS_SAME_WATCH_DIST = 0.04
         /** While capturing, the screen dims to its minimum after this long without a touch. */
         private const val IDLE_DIM_AFTER_MS = 2 * 60 * 1000L
         private const val DIM_BRIGHTNESS = 0.01f
@@ -413,6 +415,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
 
         var saved = 0
+        val saved_ = mutableListOf<android.graphics.PointF>()  // centres of watches already saved this cycle
         for ((i, target) in targets.withIndex()) {
             val box = target.second
             if (imageCapture !== capture) return
@@ -424,7 +427,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 Log.e(TAG, "Photo capture failed: ${e.message}", e)
                 continue
             }
-            saved += processCapturedBitmap(bitmap, index, FocusTarget(i, targets.map { it.first }), "w${i + 1}")
+            saved += processCapturedBitmap(bitmap, index, FocusTarget(target.first, saved_), "w${i + 1}")
         }
         finishCapture(index, saved)
     }
@@ -441,7 +444,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
     }
 
     /** Which preview target a focused photo is for: its index and the normalized (0..1) centres of all targets. */
-    private class FocusTarget(val index: Int, val centers: List<android.graphics.PointF>)
+    private class FocusTarget(val center: android.graphics.PointF, val taken: MutableList<android.graphics.PointF>)
 
     /** Watches found in the current preview frame, left to right: (normalized centre, box in preview view coordinates). */
     private suspend fun detectViewBoxes(): List<Pair<android.graphics.PointF, RectF>> {
@@ -499,20 +502,25 @@ class TrainingCaptureActivity : AppCompatActivity() {
         }
 
     /**
-     * True when this detection is the watch the camera was focused on: the nearest preview target to the
-     * detection's centre must be [FocusTarget.index] and close enough. Preview and photo share the same
-     * field of view, so normalized positions agree even if the two frames find different numbers of watches.
+     * Index (into [found]) of the detection to keep for this focused shot: the one nearest to the focus
+     * target, close enough, and not already saved by an earlier shot of the same cycle. Preview and photo share
+     * the same field of view, so normalized positions agree even when the two frames find different numbers
+     * of watches (a false extra box in the preview must not shift the others).
      */
-    private fun isFocusedWatch(box: RectF, photo: Bitmap, focus: FocusTarget): Boolean {
-        val cx = box.centerX() / photo.width
-        val cy = box.centerY() / photo.height
+    private fun focusedDetection(found: List<WatchDetection>, photo: Bitmap, focus: FocusTarget): Int {
         var best = -1
-        var bestDist = Float.MAX_VALUE
-        focus.centers.forEachIndexed { k, c ->
-            val d = Math.hypot((c.x - cx).toDouble(), (c.y - cy).toDouble()).toFloat()
-            if (d < bestDist) { bestDist = d; best = k }
+        var bestDist = FOCUS_MATCH_MAX_DIST
+        found.forEachIndexed { k, d ->
+            val cx = d.box.centerX() / photo.width
+            val cy = d.box.centerY() / photo.height
+            if (focus.taken.any { Math.hypot((it.x - cx).toDouble(), (it.y - cy).toDouble()) < FOCUS_SAME_WATCH_DIST }) return@forEachIndexed
+            val dist = Math.hypot((focus.center.x - cx).toDouble(), (focus.center.y - cy).toDouble()).toFloat()
+            if (dist < bestDist) { bestDist = dist; best = k }
         }
-        return best == focus.index && bestDist < FOCUS_MATCH_MAX_DIST
+        if (best >= 0) {
+            focus.taken.add(android.graphics.PointF(found[best].box.centerX() / photo.width, found[best].box.centerY() / photo.height))
+        }
+        return best
     }
 
     /** Detects, saves the annotated photo and the crops (only dial [onlyDial] when set); returns how many crops were saved. */
@@ -531,6 +539,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 found.forEachIndexed { i, d ->
                     Log.d(TAG, "capture $index detection ${i + 1}: ${d.category} score=${d.score} box=${d.box}")
                 }
+                val keepIndex = if (focus != null) focusedDetection(found, bitmap, focus) else -1
 
                 // Draw bounding boxes/labels on a mutable copy; keep the original bitmap for crops.
                 val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true)
@@ -553,7 +562,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
                 val captureMillis = System.currentTimeMillis()
                 val battery = batteryState()
                 found.forEachIndexed { i, d ->
-                    if (focus != null && !isFocusedWatch(d.box, bitmap, focus)) return@forEachIndexed
+                    if (focus != null && i != keepIndex) return@forEachIndexed
                     val (crop, cropRect) = cropWatch(bitmap, d.box) ?: return@forEachIndexed
                     try {
                         val imageName = "capture_${index}_watch_${i + 1}.jpg"
