@@ -58,7 +58,7 @@ ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 TAG_RE = re.compile(r"^(dataset|model)-[A-Za-z0-9._-]{1,40}$")
 ASSET_SUFFIXES = (".zip", ".json", ".csv", ".tflite")
 KEYS = {"BACK": "KEYCODE_BACK", "HOME": "KEYCODE_HOME", "WAKEUP": "KEYCODE_WAKEUP"}
-VERSION = "6"
+VERSION = "7"
 
 
 class BridgeError(Exception):
@@ -95,8 +95,37 @@ class Bridge:
             d.mkdir(parents=True, exist_ok=True)
 
     # ---- helpers -------------------------------------------------------------------------
+    GLOBAL_ADB = {"devices", "connect", "disconnect", "start-server", "kill-server", "pair"}
+
+    def pick_serial(self):
+        """Which adb transport to use. USB and Wi-Fi may both be present: prefer USB (faster, more
+        reliable), else Wi-Fi. If nothing is attached but a Wi-Fi address was saved earlier, reconnect to it."""
+        cached = getattr(self, "_serial_cache", None)
+        if cached and time.time() - cached[0] < 8:
+            return cached[1]
+        def attached():
+            out = subprocess.run([self.adb, "devices"], capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+            return [ln.split()[0] for ln in out.splitlines()[1:] if ln.strip().endswith("device")]
+        devs = attached()
+        wifi_file = self.root / "wifi_target.txt"
+        if not devs and wifi_file.exists():
+            target = wifi_file.read_text().strip()
+            if target:
+                subprocess.run([self.adb, "connect", target], capture_output=True, timeout=20)
+                devs = attached()
+        usb = [d for d in devs if ":" not in d]
+        wifi = [d for d in devs if ":" in d]
+        serial = (usb or wifi or [None])[0]
+        self._serial_cache = (time.time(), serial)
+        return serial
+
     def adb_run(self, *args, timeout=60, binary=False):
-        proc = subprocess.run([self.adb, *args], capture_output=True, timeout=timeout)
+        cmd = [self.adb]
+        if args and args[0] not in self.GLOBAL_ADB:
+            serial = self.pick_serial()
+            if serial:
+                cmd += ["-s", serial]
+        proc = subprocess.run([*cmd, *args], capture_output=True, timeout=timeout)
         if binary:
             return proc.returncode, proc.stdout
         text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace").strip()
@@ -150,7 +179,8 @@ class Bridge:
                 "github_token_set": bool(self.github_token())}
 
     def a_devices(self, params, job_id):
-        return {"devices": self.adb_run("devices", "-l")[1]}
+        self._serial_cache = None
+        return {"devices": self.adb_run("devices", "-l")[1], "using": self.pick_serial()}
 
     def a_phone_info(self, params, job_id):
         self.require_device()
@@ -394,7 +424,37 @@ class Bridge:
             deleted.append(name)
         return {"deleted_sessions": deleted, "skipped_sessions": skipped}
 
-    ACTIONS = {"ping", "devices", "phone_info", "unlock", "install_latest", "run_session",
+    def a_wifi_adb(self, params, job_id):
+        """Switch the phone to adb over Wi-Fi (needs the USB connection once). After this, unplug the
+        USB data cable and use a wall charger. params: {"port": 5555, "ip": optional}, or {"disconnect": true}."""
+        port = str(params.get("port", 5555))
+        if params.get("disconnect"):
+            wf = self.root / "wifi_target.txt"
+            if wf.exists():
+                wf.write_text("")
+            self._serial_cache = None
+            return {"disconnect": self.adb_run("disconnect")[1], "devices": self.adb_run("devices", "-l")[1]}
+        ip = params.get("ip")
+        if not ip:
+            self.require_device()
+            out = self.adb_run("shell", "ip", "-f", "inet", "addr", "show", "wlan0")[1]
+            import re
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+            if not m:
+                raise BridgeError(f"phone has no Wi-Fi address: {out[:200]}")
+            ip = m.group(1)
+            tcp = self.adb_run("tcpip", port)[1]
+            time.sleep(4)
+        else:
+            tcp = "(ip given, tcpip skipped)"
+        conn = self.adb_run("connect", f"{ip}:{port}")[1]
+        if "connected" in conn:
+            (self.root / "wifi_target.txt").write_text(f"{ip}:{port}")
+        self._serial_cache = None
+        return {"ip": ip, "tcpip": tcp, "connect": conn, "devices": self.adb_run("devices", "-l")[1],
+                "next": "USB can stay or go: the bridge uses USB when attached, Wi-Fi otherwise"}
+
+    ACTIONS = {"wifi_adb", "ping", "devices", "phone_info", "unlock", "install_latest", "run_session",
                "screenshot", "logcat", "pull_session", "app_state", "swipe", "key", "publish_release_asset"}
 
     # ---- loop ----------------------------------------------------------------------------
