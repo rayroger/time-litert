@@ -90,6 +90,16 @@ def main():
                                                         for d in sorted(set(day.tolist()))}
     # first appearance (day) of every cluster, to spot the late-added watch
     summary["first_day"] = {str(c): min(day[cl == c].tolist()) for c in range(a.clusters) if (cl == c).any()}
+    # signed error per session/position group: a constant offset means the watch was not set right (label noise)
+    pm = targets_to_time(preds)
+    signed = (pm - minutes + 360.0) % 720.0 - 360.0
+    byg = defaultdict(list)
+    for r, e in zip(rows, signed):
+        byg[r["watch"]].append(float(e))
+    for g in groups:
+        v = np.array(byg[g])
+        print("GROUPERR %s c%d n=%d mean_abs=%.1f median_signed=%.1f frac_gt5=%.2f" % (
+            g, cluster[g], len(v), np.abs(v).mean(), np.median(v), (np.abs(v) > 5).mean()))
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print("GROUPS " + json.dumps(summary))
 
