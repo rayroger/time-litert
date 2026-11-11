@@ -54,7 +54,7 @@ def main():
         interp.invoke()
         preds[i] = interp.get_tensor(outp["index"])[0][:4]
         hsv = cv2.cvtColor(im[40:184, 40:184], cv2.COLOR_BGR2HSV)
-        h = cv2.calcHist([hsv], [0, 1, 2], None, [12, 4, 4], [0, 180, 0, 256]).flatten()
+        h = cv2.calcHist([hsv], [0, 1, 2], None, [12, 4, 4], [0, 180, 0, 256, 0, 256]).flatten()
         feats[r["watch"]].append(h / h.sum())
     minutes = np.array([float(r["minutes_12h"]) for r in rows])
     err = circular_error_minutes(targets_to_time(preds), minutes)
