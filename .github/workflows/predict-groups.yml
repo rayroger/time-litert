@@ -10,7 +10,7 @@ on:
       dataset_url:
         description: "URL of the dataset zip"
         required: false
-        default: "https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_t9.zip"
+        default: "https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_c10.zip"
       model_url:
         description: "URL of model.tflite"
         required: false
@@ -18,7 +18,7 @@ on:
       clusters:
         description: "Number of watch identities to cluster the groups into"
         required: false
-        default: "5"
+        default: "6"
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       - run: pip install -r training/requirements.txt
       - name: Fetch dataset and model
         run: |
-          curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url || 'https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_t9.zip' }}"
+          curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url || 'https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_c10.zip' }}"
           curl -fL --retry 3 -o model.tflite "${{ inputs.model_url || 'https://github.com/rayroger/time-litert/releases/download/model-latest/model.tflite' }}"
       - name: Predict
         run: python training/predict_groups.py --data dataset.zip --model model.tflite --clusters ${{ inputs.clusters || '6' }} --out out_groups
