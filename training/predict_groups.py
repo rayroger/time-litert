@@ -100,9 +100,8 @@ def main():
         v = np.array(byg[g])
         print("GROUPERR %s c%d n=%d mean_abs=%.1f median_signed=%.1f frac_gt5=%.2f" % (
             g, cluster[g], len(v), np.abs(v).mean(), np.median(v), (np.abs(v) > 5).mean()))
-    flagged = {g for g in groups if (np.abs(np.array(byg[g])) > 5).mean() > 0.3}
     for r, e in zip(rows, signed):
-        if r["watch"] in flagged:
+        if abs(e) > 5:
             print("CROP %s %s %.0f %.1f" % (r["file"], r["watch"], float(r["timestamp"]), e))
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print("GROUPS " + json.dumps(summary))
