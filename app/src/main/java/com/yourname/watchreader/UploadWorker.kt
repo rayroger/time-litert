@@ -16,10 +16,6 @@ import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.SftpException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.apache.commons.net.ftp.FTP
-import org.apache.commons.net.ftp.FTPClient
-import org.apache.commons.net.ftp.FTPReply
-import org.apache.commons.net.ftp.FTPSClient
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -68,40 +64,38 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
     }
 
+    /**
+     * Uploads over a shared, kept-open FTP/FTPS connection (one login for thousands of files
+     * instead of connect + login + logout per file). If anything goes wrong on a reused
+     * connection it is dropped and the upload is retried once on a fresh one; if persistent
+     * connections keep failing, per-file connections are used as the fallback.
+     */
     private fun uploadFtp(config: UploadConfig, remoteDir: String, file: File) {
-        val client = if (config.protocol == UploadProtocol.FTPS) FTPSClient() else FTPClient()
-        client.connectTimeout = TIMEOUT_MS
-        client.defaultTimeout = TIMEOUT_MS
-        try {
-            client.connect(config.host, config.port)
-            client.soTimeout = TIMEOUT_MS
-            client.setDataTimeout(java.time.Duration.ofMillis(TIMEOUT_MS.toLong()))
-            if (!FTPReply.isPositiveCompletion(client.replyCode)) throw IOException("FTP server refused connection")
-            if (!client.login(config.username, config.password)) throw IOException("FTP login failed")
-            if (client is FTPSClient) {
-                client.execPBSZ(0)
-                client.execPROT("P")
-            }
-            client.enterLocalPassiveMode()
-            client.setFileType(FTP.BINARY_FILE_TYPE)
-            var current = if (remoteDir.startsWith("/")) "/" else ""
-            for (part in remoteDir.split("/").filter { it.isNotEmpty() }) {
-                current = if (current.isEmpty() || current.endsWith("/")) current + part else "$current/$part"
-                if (!client.changeWorkingDirectory(current)) {
-                    if (!client.makeDirectory(current) || !client.changeWorkingDirectory(current)) {
-                        throw IOException("Cannot create/enter remote directory $current")
+        if (!FtpConnection.persistentDisabled()) {
+            try {
+                FtpConnection.upload(config, remoteDir, file, TIMEOUT_MS)
+                FtpConnection.noteSuccess()
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Persistent FTP upload of ${file.name} failed: ${e.message}")
+                FtpConnection.close()
+                if (FtpConnection.noteFailure()) {
+                    Log.w(TAG, "Persistent FTP disabled for a while: using one connection per file")
+                } else {
+                    // Retry once right away on a brand-new connection.
+                    try {
+                        FtpConnection.upload(config, remoteDir, file, TIMEOUT_MS)
+                        FtpConnection.noteSuccess()
+                        return
+                    } catch (e2: Exception) {
+                        FtpConnection.close()
+                        FtpConnection.noteFailure()
+                        throw e2
                     }
                 }
             }
-            FileInputStream(file).use { input ->
-                if (!client.storeFile(remoteName(file), input)) {
-                    throw IOException("FTP upload failed: ${client.replyString?.trim()}")
-                }
-            }
-            client.logout()
-        } finally {
-            try { if (client.isConnected) client.disconnect() } catch (_: IOException) { }
         }
+        FtpConnection.uploadOneShot(config, remoteDir, file, TIMEOUT_MS)
     }
 
     private fun uploadSftp(config: UploadConfig, remoteDir: String, file: File) {
