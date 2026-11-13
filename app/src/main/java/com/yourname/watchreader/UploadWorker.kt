@@ -32,7 +32,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val path = inputData.getString(KEY_PATH) ?: return@withContext Result.failure()
         val session = inputData.getString(KEY_SESSION) ?: ""
         val file = File(path)
-        if (!file.exists()) return@withContext Result.failure()
+        // Already uploaded by an earlier drain loop (or being uploaded by one): nothing left to do.
+        // Success, not failure, so the rest of the session's chain keeps running.
+        if (!file.exists() || !claim(file)) return@withContext Result.success()
 
         val config = UploadSettings(applicationContext).load()
         if (!config.isUsable) {
@@ -48,11 +50,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 else -> uploadFtp(config, remoteDir, file)
             }
             file.delete()
+            release(file)
             deleteLocalCopy(inputData.getString(KEY_LOCAL))
+            drainQueue(config)
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            release(file)
             Log.w(TAG, "Upload of ${file.name} failed (attempt $runAttemptCount): ${e.message}", e)
             val error = Data.Builder().putString(KEY_ERROR, e.message ?: e.javaClass.simpleName).build()
             if (runAttemptCount + 1 >= MAX_ATTEMPTS) {
@@ -70,6 +75,47 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
      * connection it is dropped and the upload is retried once on a fresh one; if persistent
      * connections keep failing, per-file connections are used as the fallback.
      */
+    /**
+     * WorkManager starts one job per file with seconds of scheduling overhead each, which caps
+     * throughput at a few files a minute. After a successful upload this keeps going through the
+     * rest of the queue (oldest session first, image before its JSON) on the same open connection.
+     * Only one drain runs at a time; a failure just ends the drain and leaves the file queued.
+     */
+    private fun drainQueue(config: UploadConfig) {
+        if (config.protocol == UploadProtocol.SFTP) return
+        if (!draining.compareAndSet(false, true)) return
+        val deadline = System.currentTimeMillis() + DRAIN_BUDGET_MS
+        var sent = 0
+        try {
+            val root = File(applicationContext.filesDir, "upload_queue")
+            val sessions = root.listFiles { f -> f.isDirectory }?.sortedBy { it.name } ?: return
+            for (dir in sessions) {
+                val files = dir.listFiles { f -> f.isFile }?.sortedBy { it.name } ?: continue
+                for (f in files) {
+                    if (System.currentTimeMillis() > deadline || isStopped) return
+                    if (!claim(f)) continue
+                    try {
+                        FtpConnection.upload(config, joinRemote(config.remoteDir, dir.name), f, TIMEOUT_MS)
+                        f.delete()
+                        sent++
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Drain stopped at ${f.name}: ${e.message}")
+                        FtpConnection.close()
+                        return
+                    } finally {
+                        release(f)
+                    }
+                }
+            }
+        } finally {
+            if (sent > 0) Log.i(TAG, "Drain loop uploaded $sent files")
+            draining.set(false)
+        }
+    }
+
+    private fun claim(f: File) = inFlight.add(f.absolutePath)
+    private fun release(f: File) { inFlight.remove(f.absolutePath) }
+
     private fun uploadFtp(config: UploadConfig, remoteDir: String, file: File) {
         if (!FtpConnection.persistentDisabled()) {
             try {
@@ -176,6 +222,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // successfully uploaded files are removed from the phone.
         private const val MAX_ATTEMPTS = 15
         private const val TIMEOUT_MS = 20_000
+        private const val DRAIN_BUDGET_MS = 8 * 60_000L
+        private val draining = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     }
 }
 
