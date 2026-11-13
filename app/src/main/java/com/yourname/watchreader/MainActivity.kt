@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        UploadScheduler.kick(applicationContext)
         setContentView(R.layout.activity_main)
 
         resultText = findViewById(R.id.resultText)
