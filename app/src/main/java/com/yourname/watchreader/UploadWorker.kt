@@ -29,7 +29,8 @@ import java.util.concurrent.TimeUnit
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val path = inputData.getString(KEY_PATH) ?: return@withContext Result.failure()
+        val path = inputData.getString(KEY_PATH)
+        if (path == null) return@withContext drainOnly()
         val session = inputData.getString(KEY_SESSION) ?: ""
         val file = File(path)
         // Already uploaded by an earlier drain loop (or being uploaded by one): nothing left to do.
@@ -111,6 +112,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             if (sent > 0) Log.i(TAG, "Drain loop uploaded $sent files")
             draining.set(false)
         }
+    }
+
+    /** Drain-only job (no file of its own): sweeps the whole queue, then re-queues itself if files remain. */
+    private fun drainOnly(): Result {
+        val config = UploadSettings(applicationContext).load()
+        if (!config.isUsable) return Result.success()
+        drainQueue(config)
+        if (UploadScheduler.queuedCount(applicationContext) > 0 && !isStopped && !draining.get()) {
+            UploadScheduler.kick(applicationContext, append = true)
+        }
+        return Result.success()
     }
 
     private fun claim(f: File) = inFlight.add(f.absolutePath)
@@ -231,6 +243,23 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 /** Copies captured files into an app-private queue and schedules [UploadWorker] jobs for them. */
 object UploadScheduler {
     private const val QUEUE_DIR = "upload_queue"
+
+    /** Starts (or continues) a drain-only job that uploads whatever is waiting in the queue. */
+    fun kick(context: Context, append: Boolean = false) {
+        if (!isEnabled(context)) return
+        val request = OneTimeWorkRequestBuilder<UploadWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .addTag(UploadWorker.WORK_TAG)
+            .build()
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+            "upload_drain", if (append) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request
+        )
+    }
+
+    fun queuedCount(context: Context): Int =
+        File(context.applicationContext.filesDir, QUEUE_DIR).listFiles { f -> f.isDirectory }
+            ?.sumOf { d -> d.listFiles { f -> f.isFile }?.size ?: 0 } ?: 0
 
     fun isEnabled(context: Context): Boolean = UploadSettings(context).load().isUsable
 

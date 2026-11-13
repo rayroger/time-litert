@@ -171,6 +171,7 @@ class TrainingCaptureActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        UploadScheduler.kick(applicationContext)
         setContentView(R.layout.activity_training_capture)
         title = getString(R.string.training_capture_title)
 
