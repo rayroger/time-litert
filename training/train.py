@@ -55,7 +55,7 @@ def load_folder(path):
             {k: np.array(v, dtype=int) for k, v in dials.items()})
 
 
-def build_models(pretrained, cond_hour=False):
+def build_models(pretrained, cond_hour=False, rotate_deg=0.0):
     import tensorflow as tf
     from tensorflow.keras import layers
 
@@ -78,12 +78,18 @@ def build_models(pretrained, cond_hour=False):
 
         def head(f):
             return out(f)
-    aug = tf.keras.Sequential([
+    aug_layers = [
         layers.RandomTranslation(0.04, 0.04),
         layers.RandomZoom(0.08),
         layers.RandomBrightness(0.25, value_range=(0, 255)),
         layers.RandomContrast(0.25),
-    ], name="augment")  # no rotation/flip: the targets are hand angles in the image frame (12 at the top), so either would make the labels wrong
+    ]
+    if rotate_deg > 0:
+        # The label stays the TIME when the whole dial is turned, so the model has to find the dial's
+        # own 12 o'clock mark instead of assuming 12 is at the top of the picture. No flips: a mirrored
+        # dial reads backwards.
+        aug_layers.insert(0, layers.RandomRotation(rotate_deg / 360.0, fill_mode="reflect"))
+    aug = tf.keras.Sequential(aug_layers, name="augment")
 
     inp = tf.keras.Input((IMG, IMG, 3), name="dial")
     train_model = tf.keras.Model(inp, head(drop(dense(base(aug(inp))))), name="clock_train")
@@ -197,6 +203,8 @@ def main():
                     help="weight of the hour/minute hand consistency loss (0 = plain MSE)")
     ap.add_argument("--cond-hour", action="store_true",
                     help="predict the hour hand conditioned on the minute-hand reading")
+    ap.add_argument("--rotate", type=float, default=0.0,
+                    help="random dial rotation augmentation in degrees (+/-); the time label is unchanged")
     ap.add_argument("--init-weights", help="clock.weights.h5 from an earlier run: continue training from it "
                     "(fine-tune on new data) instead of starting from ImageNet")
     ap.add_argument("--out", default="out")
@@ -228,7 +236,7 @@ def main():
     data_info.update({"train": int(len(xt)), "validation": int(len(xv))})
     print("data:", data_info, flush=True)
 
-    train_model, infer_model, base = build_models(pretrained=not args.no_pretrained, cond_hour=args.cond_hour)
+    train_model, infer_model, base = build_models(pretrained=not args.no_pretrained, cond_hour=args.cond_hour, rotate_deg=args.rotate)
     if args.init_weights:
         infer_model.load_weights(args.init_weights)  # layers are shared with train_model
         print("continuing from", args.init_weights, flush=True)
@@ -273,6 +281,16 @@ def main():
 
     metrics = {"data": data_info, "epochs": args.epochs,
                "validation": score(infer_model, xv, tv, dv), "train": score(infer_model, xt[:1000], tt[:1000])}
+    # Robustness to a turned dial: the same validation crops rotated by fixed angles (time label unchanged).
+    import cv2
+    rv = np.random.RandomState(0).choice(len(xv), min(1500, len(xv)), replace=False)
+    metrics["rotated"] = {}
+    for deg in (-30, -15, 15, 30):
+        h, w = xv.shape[1:3]
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+        xr = np.stack([cv2.warpAffine(xv[i], M, (w, h), borderMode=cv2.BORDER_REFLECT) for i in rv])
+        r = score(infer_model, xr, tv[rv])
+        metrics["rotated"][str(deg)] = {k: r[k] for k in ("mean_abs_error_min", "median_error_min", "within_5_min")}
 
     converter = tf.lite.TFLiteConverter.from_keras_model(infer_model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]

@@ -35,6 +35,10 @@ on:
         description: "Predict the hour hand conditioned on the minute reading (true/false)"
         required: false
         default: "false"
+      rotate_deg:
+        description: "Random dial rotation augmentation in degrees (0 = off)"
+        required: false
+        default: "0"
       init_weights_url:
         description: "URL of clock.weights.h5 from an earlier run: continue training from it (empty = start fresh)"
         required: false
@@ -73,7 +77,7 @@ jobs:
           COND=""; [ "${{ inputs.cond_hour }}" = "true" ] && COND="--cond-hour"
           if [ -f dataset.zip ]; then
             python training/train.py --data dataset.zip --epochs ${{ inputs.epochs || '20' }} \
-              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --consistency ${{ inputs.consistency || '0' }} $COND $INIT --out out
+              --synthetic-extra ${{ inputs.synthetic_extra || '0' }} --consistency ${{ inputs.consistency || '0' }} --rotate ${{ inputs.rotate_deg || '0' }} $COND $INIT --out out
           else
             FLAGS=""; [ "${{ inputs.pretrained }}" = "true" ] || FLAGS="--no-pretrained"
             python training/train.py --synthetic ${{ inputs.synthetic_n || '1200' }} --epochs ${{ inputs.epochs || '4' }} $FLAGS --out out
