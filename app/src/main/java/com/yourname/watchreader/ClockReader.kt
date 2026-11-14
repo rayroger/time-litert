@@ -2,6 +2,7 @@ package com.yourname.watchreader
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
@@ -21,12 +22,38 @@ class ClockReader private constructor(private val interpreter: Interpreter) {
     private val input = ByteBuffer.allocateDirect(4 * SIZE * SIZE * 3).order(ByteOrder.nativeOrder())
     private val pixels = IntArray(SIZE * SIZE)
 
-    /** "H:MM" for a dial crop, or null if inference fails. Not thread-safe: call from one thread. */
+    /**
+     * "H:MM" for a dial crop, or null if inference fails. Runs the model on the crop and on two
+     * slightly turned copies (+-[TTA_DEG] degrees) and averages the hand vectors, which cancels
+     * random jitter. Not thread-safe: call from one thread.
+     */
+    fun read(crop: Bitmap): String? = readVector(crop)?.let { decode(it) }
+
+    /** Averaged [sin h, cos h, sin m, cos m] for [crop] (see [read]); null if inference fails. */
     @Synchronized
-    fun read(crop: Bitmap): String? = try {
+    fun readVector(crop: Bitmap): FloatArray? = try {
         val scaled = Bitmap.createScaledBitmap(crop, SIZE, SIZE, true)
-        scaled.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
+        val outs = ArrayList<FloatArray>(3)
+        outs += run(scaled)
+        for (deg in floatArrayOf(TTA_DEG, -TTA_DEG)) {
+            val m = Matrix().apply { postRotate(deg, SIZE / 2f, SIZE / 2f) }
+            val turned = Bitmap.createBitmap(scaled, 0, 0, SIZE, SIZE, m, true)
+            val fitted = if (turned.width == SIZE && turned.height == SIZE) turned
+                else Bitmap.createBitmap(turned, (turned.width - SIZE) / 2, (turned.height - SIZE) / 2, SIZE, SIZE)
+            try { outs += run(fitted) } finally {
+                if (fitted !== turned) fitted.recycle()
+                turned.recycle()
+            }
+        }
         if (scaled !== crop) scaled.recycle()
+        average(outs)
+    } catch (e: Exception) {
+        Log.w(TAG, "clock inference failed: ${e.message}")
+        null
+    }
+
+    private fun run(bitmap: Bitmap): FloatArray {
+        bitmap.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
         input.rewind()
         for (p in pixels) {
             input.putFloat(((p shr 16) and 0xFF).toFloat())
@@ -36,10 +63,7 @@ class ClockReader private constructor(private val interpreter: Interpreter) {
         input.rewind()
         val out = Array(1) { FloatArray(4) }
         interpreter.run(input, out)
-        decode(out[0])
-    } catch (e: Exception) {
-        Log.w(TAG, "clock inference failed: ${e.message}")
-        null
+        return out[0]
     }
 
     fun close() = interpreter.close()
@@ -48,6 +72,18 @@ class ClockReader private constructor(private val interpreter: Interpreter) {
         private const val TAG = "ClockReader"
         private const val ASSET = "clock_reader.tflite"
         private const val SIZE = 224
+        private const val TTA_DEG = 5f
+
+        /** Mean of several readings: each (sin, cos) pair is normalised first so every reading counts equally. */
+        fun average(list: List<FloatArray>): FloatArray {
+            val sum = FloatArray(4)
+            for (v in list) for (k in 0..2 step 2) {
+                val n = Math.hypot(v[k].toDouble(), v[k + 1].toDouble()).toFloat().coerceAtLeast(1e-6f)
+                sum[k] += v[k] / n
+                sum[k + 1] += v[k + 1] / n
+            }
+            return sum
+        }
 
         fun create(context: Context): ClockReader? = try {
             val fd = context.assets.openFd(ASSET)
