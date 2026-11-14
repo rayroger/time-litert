@@ -133,6 +133,17 @@ class TrainingCaptureActivity : AppCompatActivity() {
     private var cameraControl: CameraControl? = null
     private var watchDetector: WatchDetector? = null
     private var clockReader: ClockReader? = null
+    // Last few live readings per on-screen watch (left to right), averaged so the displayed time
+    // does not jitter from frame to frame. Short window: the time moves on while we average.
+    private val recentReadings = HashMap<Int, ArrayDeque<Pair<Long, FloatArray>>>()
+
+    @Synchronized private fun smoothReading(slot: Int, vector: FloatArray): String {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val q = recentReadings.getOrPut(slot) { ArrayDeque() }
+        q.addLast(now to vector)
+        while (q.isNotEmpty() && now - q.first().first > 3000L) q.removeFirst()
+        return ClockReader.decode(ClockReader.average(q.map { it.second }))
+    }
     private var captureLoopJob: Job? = null
     private var sessionTimestamp: String? = null
     private var fileServer: FileServer? = null
@@ -722,9 +733,9 @@ class TrainingCaptureActivity : AppCompatActivity() {
                                 .mapIndexed { i, d ->
                                     val reading = clockReader?.let { r ->
                                         cropWatch(small, d.box)?.let { (crop, _) ->
-                                            try { r.read(crop) } finally { crop.recycle() }
+                                            try { r.readVector(crop) } finally { crop.recycle() }
                                         }
-                                    }
+                                    }?.let { smoothReading(i, it) }
                                     LiveBox(RectF(d.box.left * sx, d.box.top * sy, d.box.right * sx, d.box.bottom * sy), i + 1, d.score, reading)
                                 }
                         } finally {
