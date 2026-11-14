@@ -1,0 +1,47 @@
+name: Per-watch error breakdown
+
+# Manual only. Runs a published model.tflite over every crop of a dataset zip and prints a GROUPS line
+# (error per watch cluster / split / day); predictions.csv and summary.json are uploaded as an artifact.
+on:
+  pull_request:
+    paths: [ "training/predict_groups.py", ".github/workflows/predict-groups.yml" ]
+  workflow_dispatch:
+    inputs:
+      dataset_url:
+        description: "URL of the dataset zip"
+        required: false
+        default: "https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_c12.zip"
+      model_url:
+        description: "URL of model.tflite"
+        required: false
+        default: "https://github.com/rayroger/time-litert/releases/download/model-latest/model.tflite"
+      clusters:
+        description: "Number of watch identities to cluster the groups into"
+        required: false
+        default: "6"
+
+permissions:
+  contents: read
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: training/requirements.txt
+      - run: pip install -r training/requirements.txt
+      - name: Fetch dataset and model
+        run: |
+          curl -fL --retry 3 -o dataset.zip "${{ inputs.dataset_url || 'https://github.com/rayroger/time-litert/releases/download/dataset-latest/dataset_c12.zip' }}"
+          curl -fL --retry 3 -o model.tflite "${{ inputs.model_url || 'https://github.com/rayroger/time-litert/releases/download/model-latest/model.tflite' }}"
+      - name: Predict
+        run: python training/predict_groups.py --data dataset.zip --model model.tflite --clusters ${{ inputs.clusters || '6' }} --out out_groups
+      - uses: actions/upload-artifact@v4
+        with:
+          name: per-watch-breakdown
+          path: out_groups/
